@@ -2,6 +2,7 @@ import { WebSocket as WS } from "ws";
 import { IncomingMessage } from "http";
 import { URL } from "url";
 import { CallSession } from "../session";
+import { logger } from "../logger";
 
 export async function handleBrowserConnection(
   ws: WS,
@@ -9,12 +10,11 @@ export async function handleBrowserConnection(
 ): Promise<void> {
   const params = new URL(request.url ?? "", "http://localhost").searchParams;
   const projectId = params.get("project_id");
-  console.log(`[browser] client connected — project_id: ${projectId ?? "none"}`);
+  logger.info("browser client connected", { project_id: projectId ?? "none" });
 
   const session = new CallSession(projectId, null, {
     sendAudio: (pcm24Base64) => {
       if (ws.readyState === WS.OPEN) {
-        // Browser expects the same event shape server.js used to forward
         ws.send(JSON.stringify({ type: "response.output_audio.delta", delta: pcm24Base64 }));
       }
     },
@@ -43,9 +43,9 @@ export async function handleBrowserConnection(
   });
 
   ws.on("close", () => {
-    console.log("[browser] client disconnected");
-    session.end().catch((e) => console.error("[browser] session.end error:", (e as Error).message));
+    logger.info("browser client disconnected");
+    session.end().catch((e) => logger.error("session.end error", { err: e }));
   });
 
-  ws.on("error", (e) => console.error("[browser] WS error:", e.message));
+  ws.on("error", (e) => logger.error("browser WS error", { err: e }));
 }

@@ -1,3 +1,5 @@
+import { logger } from "./logger";
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
@@ -5,8 +7,11 @@ export async function executeTool(
   calendarProjectId: string,
 ): Promise<unknown> {
   const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
+  const t0 = Date.now();
 
   try {
+    let result: unknown;
+
     if (name === "get_available_slots") {
       const fromIso = args["from_date"]
         ? new Date(`${args["from_date"]}T00:00:00`).toISOString()
@@ -18,19 +23,15 @@ export async function executeTool(
         ...(args["duration_minutes"] ? { duration: String(args["duration_minutes"]) } : {}),
       });
       const r = await fetch(`${base}/api/calendar/slots?${params}`);
-      return await r.json();
-    }
-
-    if (name === "web_search") {
+      result = await r.json();
+    } else if (name === "web_search") {
       const params = new URLSearchParams({
         project_id: calendarProjectId,
         q: String(args["query"] ?? ""),
       });
       const r = await fetch(`${base}/api/web-search?${params}`);
-      return await r.json();
-    }
-
-    if (name === "create_calendar_event") {
+      result = await r.json();
+    } else if (name === "create_calendar_event") {
       const r = await fetch(`${base}/api/calendar/events?project_id=${calendarProjectId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -46,10 +47,8 @@ export async function executeTool(
           event_kind: "work",
         }),
       });
-      return await r.json();
-    }
-
-    if (name === "create_enquiry") {
+      result = await r.json();
+    } else if (name === "create_enquiry") {
       const r = await fetch(`${base}/api/enquiries`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -63,11 +62,15 @@ export async function executeTool(
           status: "new",
         }),
       });
-      return await r.json();
+      result = await r.json();
+    } else {
+      return { error: `Unknown tool: ${name}` };
     }
 
-    return { error: `Unknown tool: ${name}` };
+    logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
+    return result;
   } catch (e) {
+    logger.error("tool execution error", { name, duration_ms: Date.now() - t0, err: e });
     return { error: String(e) };
   }
 }

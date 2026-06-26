@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
 import { CallLogger, generateCallSummary } from "./call-logger";
 import { loadAssistantSettings } from "./config";
+import { logger } from "./logger";
 import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
 
@@ -46,7 +47,7 @@ export class CallSession {
 
     this.logger.openaiPayload = { model: "gpt-realtime", voice, instructions, tools };
 
-    console.log(`[session] connecting to OpenAI (project: ${this.projectId ?? "none"})`);
+    logger.info("connecting to OpenAI", { project_id: this.projectId ?? "none" });
 
     const openaiWs = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-realtime", {
       headers: { Authorization: `Bearer ${apiKey}` },
@@ -54,7 +55,7 @@ export class CallSession {
     this.openaiWs = openaiWs;
 
     openaiWs.on("open", () => {
-      console.log("[session] OpenAI connected — sending session.update");
+      logger.info("OpenAI connected, sending session.update");
       openaiWs.send(JSON.stringify({
         type: "session.update",
         session: {
@@ -85,25 +86,20 @@ export class CallSession {
     });
 
     openaiWs.on("message", (data) => {
-      const raw = data.toString();
-      try {
-        const msg = JSON.parse(raw) as Record<string, unknown>;
-        if (msg["type"] === "error") console.error("[session] OpenAI error:", JSON.stringify(msg));
-      } catch { /* ignore */ }
-      this.handleOpenAIMessage(raw).catch((e) =>
-        console.error("[session] handleOpenAIMessage error:", (e as Error).message)
+      this.handleOpenAIMessage(data.toString()).catch((e) =>
+        logger.error("handleOpenAIMessage error", { err: e })
       );
     });
 
     openaiWs.on("close", (code) => {
-      console.log(`[session] OpenAI disconnected (code ${code})`);
+      logger.warn("OpenAI disconnected", { code });
       if (!this.ended) {
         this.callbacks.sendJson({ type: "error", message: `OpenAI disconnected (code ${code})` });
       }
     });
 
     openaiWs.on("error", (e) => {
-      console.error("[session] OpenAI WS error:", e.message);
+      logger.error("OpenAI WS error", { err: e });
       this.callbacks.sendJson({ type: "error", message: `OpenAI error: ${e.message}` });
     });
   }
@@ -122,7 +118,7 @@ export class CallSession {
   async end(): Promise<void> {
     if (this.ended) return;
     this.ended = true;
-    console.log("[session] ending — generating summary");
+    logger.info("session ending, generating summary");
     if (this.openaiWs?.readyState === WebSocket.OPEN) this.openaiWs.close();
     const apiKey = process.env.OPENAI_API_KEY ?? "";
     const { title, summary } = await generateCallSummary(apiKey, this.logger.transcript);
@@ -134,11 +130,15 @@ export class CallSession {
     try { msg = JSON.parse(raw); } catch { return; }
 
     const type = msg["type"] as string;
-    if (type !== "response.output_audio.delta") console.log(`[session] ← ${type}`);
+
+    if (type === "error") {
+      logger.error("OpenAI error event", { detail: JSON.stringify(msg) });
+    } else if (type !== "response.output_audio.delta") {
+      logger.debug("← openai event", { type });
+    }
 
     this.logger.handleOpenAIEvent(msg);
 
-    // Audio chunks go to sendAudio; everything else goes to sendJson for client UI
     if (type === "response.output_audio.delta") {
       this.callbacks.sendAudio(msg["delta"] as string);
       return;
@@ -146,7 +146,6 @@ export class CallSession {
 
     this.callbacks.sendJson(msg);
 
-    // Engine executes tool calls — browser/Twilio only shows UI indicators
     if (type === "response.function_call_arguments.done") {
       await this.executeToolCall(
         msg["name"] as string,
@@ -157,16 +156,16 @@ export class CallSession {
   }
 
   private async executeToolCall(name: string, argsJson: string, callId: string): Promise<void> {
-    console.log(`[session] executing tool: ${name}`);
+    logger.info("executing tool", { name });
     let args: Record<string, unknown> = {};
     try { args = JSON.parse(argsJson); } catch { /* invalid json from model */ }
 
+    const t0 = Date.now();
     const result = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId);
+    logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
 
-    // Notify client UI that tool is done
     this.callbacks.sendJson({ type: "engine.tool_done", name });
 
-    // Send result back to OpenAI and trigger next response
     const toolResultMsg = {
       type: "conversation.item.create",
       item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) },

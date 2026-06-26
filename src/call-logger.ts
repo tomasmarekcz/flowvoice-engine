@@ -1,4 +1,5 @@
 import { getSupabaseUrl, getSupabaseHeaders } from "./config";
+import { logger } from "./logger";
 
 export interface TranscriptEntry {
   role: "user" | "assistant";
@@ -57,10 +58,10 @@ export class CallLogger {
       });
       const rows = (await res.json()) as Array<{ id: string }>;
       this.callId = rows?.[0]?.id ?? null;
-      if (this.callId) console.log(`[logger] call created: ${this.callId}`);
-      else console.warn("[logger] createCall: no id returned", rows);
+      if (this.callId) logger.info("call created", { call_id: this.callId });
+      else logger.warn("createCall returned no id", { rows: JSON.stringify(rows) });
     } catch (e) {
-      console.error("[logger] createCall error:", (e as Error).message);
+      logger.error("createCall error", { err: e });
     }
   }
 
@@ -78,7 +79,7 @@ export class CallLogger {
         direction,
         payload,
       }),
-    }).catch((e: Error) => console.error("[logger] logEvent error:", e.message));
+    }).catch((e: Error) => logger.error("logEvent error", { err: e }));
   }
 
   handleOpenAIEvent(msg: Record<string, unknown>): void {
@@ -147,8 +148,9 @@ export class CallLogger {
   async finalizeCall(aiTitle: string | null, aiSummary: string | null): Promise<void> {
     if (!this.enabled || !this.callId) return;
     const endMs = Date.now();
+    const duration_seconds = Math.round((endMs - this.startMs) / 1000);
     this.logEvent("call.ended", "system", {
-      duration_seconds: Math.round((endMs - this.startMs) / 1000),
+      duration_seconds,
       transcript_turns: this.transcript.length,
       tool_calls_count: this.toolCalls.length,
     });
@@ -159,7 +161,7 @@ export class CallLogger {
         headers: { ...getSupabaseHeaders(), Prefer: "return=minimal" },
         body: JSON.stringify({
           ended_at: new Date(endMs).toISOString(),
-          duration_seconds: Math.round((endMs - this.startMs) / 1000),
+          duration_seconds,
           transcript: this.transcript,
           tool_calls: this.toolCalls,
           ai_title: aiTitle ?? null,
@@ -167,9 +169,9 @@ export class CallLogger {
           openai_payload: this.openaiPayload ?? null,
         }),
       });
-      console.log(`[logger] call finalized: ${this.callId} (${Math.round((endMs - this.startMs) / 1000)}s, ${this.transcript.length} turns)`);
+      logger.info("call finalized", { call_id: this.callId, duration_seconds, turns: this.transcript.length });
     } catch (e) {
-      console.error("[logger] finalizeCall error:", (e as Error).message);
+      logger.error("finalizeCall error", { err: e });
     }
   }
 }
@@ -203,7 +205,7 @@ export async function generateCallSummary(
     const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as { title?: string; summary?: string };
     return { title: parsed.title ?? null, summary: parsed.summary ?? null };
   } catch (e) {
-    console.error("[logger] generateCallSummary error:", (e as Error).message);
+    logger.error("generateCallSummary error", { err: e });
     return { title: null, summary: null };
   }
 }

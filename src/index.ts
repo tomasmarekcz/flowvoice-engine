@@ -3,6 +3,7 @@ import http from "http";
 import { WebSocketServer } from "ws";
 import { handleTwilioVoiceWebhook, handleTwilioConnection } from "./handlers/twilio";
 import { handleBrowserConnection } from "./handlers/browser";
+import { logger } from "./logger";
 
 const app = express();
 app.use(express.json());
@@ -23,14 +24,14 @@ server.on("upgrade", (request, socket, head) => {
   if (url.startsWith("/ws/twilio")) {
     wss.handleUpgrade(request, socket, head, (ws) => {
       handleTwilioConnection(ws, request).catch((e) => {
-        console.error("[engine] twilio handler error:", (e as Error).message);
+        logger.error("twilio handler error", { err: e });
         ws.close();
       });
     });
   } else if (url.startsWith("/ws/browser")) {
     wss.handleUpgrade(request, socket, head, (ws) => {
       handleBrowserConnection(ws, request).catch((e) => {
-        console.error("[engine] browser handler error:", (e as Error).message);
+        logger.error("browser handler error", { err: e });
         ws.close();
       });
     });
@@ -42,7 +43,7 @@ server.on("upgrade", (request, socket, head) => {
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
 
 server.listen(PORT, () => {
-  console.log(`[engine] listening on port ${PORT}`);
+  logger.info("engine listening", { port: PORT });
 });
 
 export { app, server };

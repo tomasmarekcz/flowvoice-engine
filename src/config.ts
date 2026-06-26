@@ -1,3 +1,5 @@
+import { logger } from "./logger";
+
 export interface AssistantSettings {
   project_id: string;
   system_prompt: string | null;
@@ -62,7 +64,7 @@ export async function loadAssistantSettings(
 
     return settings;
   } catch (e) {
-    console.error("[config] loadAssistantSettings error:", (e as Error).message);
+    logger.error("loadAssistantSettings error", { project_id: projectId, err: e });
     return null;
   }
 }
