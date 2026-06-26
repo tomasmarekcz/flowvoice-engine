@@ -1,0 +1,24 @@
+name: Deploy Engine
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            cd ~/flowvoice-engine
+            git pull origin main
+            docker build -t flowvoice-engine .
+            docker stop engine || true
+            docker rm engine || true
+            docker run -d --restart=always --env-file .env --network host --name engine flowvoice-engine
+            echo "✅ Engine deployed"
