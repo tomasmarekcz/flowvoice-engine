@@ -58,6 +58,7 @@ export class CallSession {
       openaiWs.send(JSON.stringify({
         type: "session.update",
         session: {
+          type: "realtime",
           modalities: ["text", "audio"],
           instructions,
           voice,
