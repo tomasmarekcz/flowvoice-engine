@@ -82,7 +82,12 @@ export class CallSession {
     });
 
     openaiWs.on("message", (data) => {
-      this.handleOpenAIMessage(data.toString()).catch((e) =>
+      const raw = data.toString();
+      try {
+        const msg = JSON.parse(raw) as Record<string, unknown>;
+        if (msg["type"] === "error") console.error("[session] OpenAI error:", JSON.stringify(msg));
+      } catch { /* ignore */ }
+      this.handleOpenAIMessage(raw).catch((e) =>
         console.error("[session] handleOpenAIMessage error:", (e as Error).message)
       );
     });
