@@ -21,10 +21,9 @@ export function handleTwilioVoiceWebhook(req: Request, res: Response): void {
     }
   }
 
-  const projectId =
-    (req.query["project_id"] as string) ??
-    (req.body as Record<string, string>)["project_id"] ??
-    "";
+  const body = req.body as Record<string, string>;
+  const projectId = (req.query["project_id"] as string) ?? body["project_id"] ?? "";
+  const callerPhone = body["From"] ?? "";
   const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "localhost:8080";
   const wsProtocol = process.env.ENGINE_HOST ? "wss" : "ws";
 
@@ -33,6 +32,7 @@ export function handleTwilioVoiceWebhook(req: Request, res: Response): void {
   <Connect>
     <Stream url="${wsProtocol}://${engineHost}/ws/twilio">
       <Parameter name="project_id" value="${projectId}" />
+      <Parameter name="caller_phone" value="${callerPhone}" />
     </Stream>
   </Connect>
 </Response>`;
@@ -60,7 +60,7 @@ export async function handleTwilioConnection(
       streamSid = msg["streamSid"] as string;
       const customParams = (start["customParameters"] as Record<string, string>) ?? {};
       const projectId = customParams["project_id"] ?? null;
-      const callerPhone = (start["callSid"] as string) ?? null;
+      const callerPhone = customParams["caller_phone"] || null;
 
       logger.info("Twilio stream started", { stream_sid: streamSid, project_id: projectId ?? "none" });
 
