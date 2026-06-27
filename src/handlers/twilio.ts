@@ -24,6 +24,12 @@ export function handleTwilioVoiceWebhook(req: Request, res: Response): void {
   const body = req.body as Record<string, string>;
   const projectId = (req.query["project_id"] as string) ?? body["project_id"] ?? "";
   const callerPhone = body["From"] ?? "";
+
+  // Log all Twilio/SIP params to help debug forwarded call caller ID
+  const sipFields = Object.fromEntries(
+    Object.entries(body).filter(([k]) => k.startsWith("Sip") || ["From","To","ForwardedFrom","CallerCountry","Called","Caller"].includes(k))
+  );
+  logger.info("twilio voice webhook", { project_id: projectId, caller: callerPhone, sip_fields: sipFields });
   const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "localhost:8080";
   const wsProtocol = process.env.ENGINE_HOST ? "wss" : "ws";
 
