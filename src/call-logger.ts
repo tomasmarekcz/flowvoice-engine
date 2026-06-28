@@ -21,12 +21,20 @@ interface PendingToolCall {
   startMs: number;
 }
 
+export interface SmsOptions {
+  smsOwnerEnabled: boolean;
+  smsCallerEnabled: boolean;
+  smsOwnerInstructions: string | null;
+  smsCallerInstructions: string | null;
+}
+
 export class CallLogger {
   callId: string | null = null;
   transcript: TranscriptEntry[] = [];
   openaiPayload: unknown = null;
 
   private projectId: string | null;
+  private twilioCallSid: string | null;
   private seq = 0;
   private startMs = Date.now();
   private toolCalls: ToolCallEntry[] = [];
@@ -37,8 +45,9 @@ export class CallLogger {
     catch { return false; }
   }
 
-  constructor(projectId: string | null) {
+  constructor(projectId: string | null, twilioCallSid: string | null = null) {
     this.projectId = projectId;
+    this.twilioCallSid = twilioCallSid;
   }
 
   async createCall(callerPhone: string | null): Promise<void> {
@@ -54,6 +63,7 @@ export class CallLogger {
           status: "new",
           transcript: [],
           tool_calls: [],
+          twilio_call_sid: this.twilioCallSid ?? null,
         }),
       });
       const rows = (await res.json()) as Array<{ id: string }>;
@@ -145,7 +155,12 @@ export class CallLogger {
     }
   }
 
-  async finalizeCall(aiTitle: string | null, aiSummary: string | null): Promise<void> {
+  async finalizeCall(
+    aiTitle: string | null,
+    aiSummary: string | null,
+    smsOwnerSent = false,
+    smsCallerSent = false
+  ): Promise<void> {
     if (!this.enabled || !this.callId) return;
     const endMs = Date.now();
     const duration_seconds = Math.round((endMs - this.startMs) / 1000);
@@ -167,6 +182,8 @@ export class CallLogger {
           ai_title: aiTitle ?? null,
           ai_summary: aiSummary ?? null,
           openai_payload: this.openaiPayload ?? null,
+          sms_owner_sent: smsOwnerSent,
+          sms_caller_sent: smsCallerSent,
         }),
       });
       logger.info("call finalized", { call_id: this.callId, duration_seconds, turns: this.transcript.length });
@@ -178,12 +195,30 @@ export class CallLogger {
 
 export async function generateCallSummary(
   apiKey: string,
-  transcript: TranscriptEntry[]
-): Promise<{ title: string | null; summary: string | null }> {
-  if (!apiKey || transcript.length === 0) return { title: null, summary: null };
+  transcript: TranscriptEntry[],
+  smsOptions?: SmsOptions
+): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null }> {
+  if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null };
+
+  const needOwnerSms = smsOptions?.smsOwnerEnabled && !!smsOptions.smsOwnerInstructions;
+  const needCallerSms = smsOptions?.smsCallerEnabled && !!smsOptions.smsCallerInstructions;
+
+  const smsOwnerPart = needOwnerSms
+    ? `\n- "owner_sms": SMS for the business owner (max 160 chars). Instructions: ${smsOptions!.smsOwnerInstructions}`
+    : "";
+  const smsCallerPart = needCallerSms
+    ? `\n- "caller_sms": SMS for the caller (max 160 chars). Instructions: ${smsOptions!.smsCallerInstructions}`
+    : "";
+
+  const hasSms = smsOwnerPart || smsCallerPart;
+  const responseShape = `{"title": "...", "summary": "..."${needOwnerSms ? ', "owner_sms": "..."' : ""}${needCallerSms ? ', "caller_sms": "..."' : ""}}`;
+
+  const systemPrompt = `Summarize this business phone call. Generate a short title (max 6 words) and a one-sentence summary. Match the language of the conversation.${hasSms ? " Also generate:" : ""}${smsOwnerPart}${smsCallerPart}\nRespond ONLY as JSON: ${responseShape}`;
+
   const lines = transcript
     .map((t) => `${t.role === "user" ? "Customer" : "Assistant"}: ${t.text}`)
     .join("\n");
+
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -191,21 +226,25 @@ export async function generateCallSummary(
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
-          {
-            role: "system",
-            content: 'Summarize this business phone call. Generate a short title (max 6 words) and a one-sentence summary. Match the language of the conversation. Respond ONLY as JSON: {"title": "...", "summary": "..."}',
-          },
+          { role: "system", content: systemPrompt },
           { role: "user", content: lines.slice(0, 4000) },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 120,
+        max_tokens: 300,
       }),
     });
     const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-    const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as { title?: string; summary?: string };
-    return { title: parsed.title ?? null, summary: parsed.summary ?? null };
+    const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as {
+      title?: string; summary?: string; owner_sms?: string; caller_sms?: string;
+    };
+    return {
+      title: parsed.title ?? null,
+      summary: parsed.summary ?? null,
+      ownerSms: parsed.owner_sms ?? null,
+      callerSms: parsed.caller_sms ?? null,
+    };
   } catch (e) {
     logger.error("generateCallSummary error", { err: e });
-    return { title: null, summary: null };
+    return { title: null, summary: null, ownerSms: null, callerSms: null };
   }
 }

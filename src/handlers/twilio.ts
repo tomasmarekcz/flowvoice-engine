@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import { CallSession } from "../session";
 import { logger } from "../logger";
 import { twilioAudioToOpenAI, openAIAudioToTwilio } from "../audio";
+import { getSupabaseUrl, getSupabaseHeaders } from "../config";
 
 export function handleTwilioVoiceWebhook(req: Request, res: Response): void {
   if (process.env.TWILIO_SKIP_VALIDATION !== "true") {
@@ -27,22 +28,60 @@ export function handleTwilioVoiceWebhook(req: Request, res: Response): void {
   // Extract phone number from SIP URI e.g. "sip:+420721071534@sip.zadarma.com" → "+420721071534"
   const sipMatch = rawFrom.match(/sip:([^@]+)@/);
   const callerPhone = sipMatch ? sipMatch[1] : rawFrom;
+  const callSid = body["CallSid"] ?? "";
 
-  logger.info("twilio voice webhook", { project_id: projectId, caller: callerPhone });
+  logger.info("twilio voice webhook", { project_id: projectId, caller: callerPhone, call_sid: callSid });
+
   const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "localhost:8080";
   const wsProtocol = process.env.ENGINE_HOST ? "wss" : "ws";
+  const httpProtocol = process.env.ENGINE_HOST ? "https" : "http";
+  const recordingCallback = `${httpProtocol}://${engineHost}/twilio/recording-status`;
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Start>
+    <Recording recordingStatusCallback="${recordingCallback}" recordingStatusCallbackEvent="completed" />
+  </Start>
   <Connect>
     <Stream url="${wsProtocol}://${engineHost}/ws/twilio">
       <Parameter name="project_id" value="${projectId}" />
       <Parameter name="caller_phone" value="${callerPhone}" />
+      <Parameter name="call_sid" value="${callSid}" />
     </Stream>
   </Connect>
 </Response>`;
 
   res.type("text/xml").send(twiml);
+}
+
+export async function handleRecordingStatusCallback(req: Request, res: Response): Promise<void> {
+  const body = req.body as Record<string, string>;
+  const status = body["RecordingStatus"];
+  const recordingUrl = body["RecordingUrl"];
+  const recordingSid = body["RecordingSid"];
+  const callSid = body["CallSid"];
+
+  // Respond immediately — Twilio expects fast acknowledgement
+  res.sendStatus(200);
+
+  if (status !== "completed" || !recordingUrl || !callSid) return;
+
+  try {
+    await fetch(
+      `${getSupabaseUrl()}/rest/v1/calls?twilio_call_sid=eq.${encodeURIComponent(callSid)}`,
+      {
+        method: "PATCH",
+        headers: { ...getSupabaseHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({
+          recording_url: `${recordingUrl}.mp3`,
+          recording_sid: recordingSid,
+        }),
+      }
+    );
+    logger.info("recording url saved", { call_sid: callSid, recording_sid: recordingSid });
+  } catch (e) {
+    logger.error("recording status callback error", { err: e });
+  }
 }
 
 export async function handleTwilioConnection(
@@ -66,12 +105,13 @@ export async function handleTwilioConnection(
       const customParams = (start["customParameters"] as Record<string, string>) ?? {};
       const projectId = customParams["project_id"] ?? null;
       const callerPhone = customParams["caller_phone"] || null;
+      const callSid = customParams["call_sid"] || null;
 
-      logger.info("Twilio stream started", { stream_sid: streamSid, project_id: projectId ?? "none" });
+      logger.info("Twilio stream started", { stream_sid: streamSid, project_id: projectId ?? "none", call_sid: callSid ?? "none" });
 
       const capturedStreamSid = streamSid;
 
-      session = new CallSession(projectId, callerPhone, {
+      session = new CallSession(projectId, callerPhone, callSid, {
         sendAudio: (pcm24Base64) => {
           if (!capturedStreamSid || ws.readyState !== WS.OPEN) return;
           ws.send(JSON.stringify({

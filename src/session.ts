@@ -13,6 +13,7 @@ export interface SessionCallbacks {
 export class CallSession {
   private projectId: string | null;
   private callerPhone: string | null;
+  private twilioCallSid: string | null;
   private callbacks: SessionCallbacks;
   private openaiWs: WebSocket | null = null;
   private logger: CallLogger;
@@ -22,12 +23,14 @@ export class CallSession {
   constructor(
     projectId: string | null,
     callerPhone: string | null,
+    twilioCallSid: string | null,
     callbacks: SessionCallbacks
   ) {
     this.projectId = projectId;
     this.callerPhone = callerPhone;
+    this.twilioCallSid = twilioCallSid;
     this.callbacks = callbacks;
-    this.logger = new CallLogger(projectId);
+    this.logger = new CallLogger(projectId, twilioCallSid);
   }
 
   async start(): Promise<void> {
