@@ -13,6 +13,11 @@ export interface AssistantSettings {
   enquiries_required_fields: Record<string, boolean> | null;
   calendar_id: string | null;
   _calendar_project_id: string;
+  sms_owner_enabled: boolean;
+  sms_caller_enabled: boolean;
+  sms_owner_instructions: string | null;
+  sms_caller_instructions: string | null;
+  owner_phone: string | null;
 }
 
 function isUuid(str: string | null | undefined): boolean {
@@ -43,11 +48,13 @@ export async function loadAssistantSettings(
   try {
     const url = getSupabaseUrl();
     const headers = getSupabaseHeaders();
-    const res = await fetch(
-      `${url}/rest/v1/assistant_settings?project_id=eq.${projectId}&limit=1`,
-      { headers }
-    );
-    const rows = (await res.json()) as AssistantSettings[];
+
+    const [settingsRes, projectRes] = await Promise.all([
+      fetch(`${url}/rest/v1/assistant_settings?project_id=eq.${projectId}&limit=1`, { headers }),
+      fetch(`${url}/rest/v1/projects?id=eq.${projectId}&select=owner_phone&limit=1`, { headers }),
+    ]);
+
+    const rows = (await settingsRes.json()) as AssistantSettings[];
     if (!Array.isArray(rows) || rows.length === 0) return null;
     const settings = rows[0];
 
@@ -61,6 +68,9 @@ export async function loadAssistantSettings(
     } else {
       settings._calendar_project_id = "admin-test";
     }
+
+    const projectRows = (await projectRes.json()) as Array<{ owner_phone: string | null }>;
+    settings.owner_phone = projectRows?.[0]?.owner_phone ?? null;
 
     return settings;
   } catch (e) {
