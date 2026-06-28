@@ -26,18 +26,25 @@ Your main job is to help customers book appointments. You have access to the rea
 
 When a customer wants to book a consultation, appointment, or service visit:
 1. Understand what they need (ask one short question if unclear)
-2. Ask the customer when they would roughly like the appointment before calling get_available_slots
-3. Based on their answer, call get_available_slots with the appropriate from_date (YYYY-MM-DD)
-4. Present 3–4 options clearly and simply
-5. Once they pick a time, ask for their name and phone number
-6. Call create_calendar_event to book it — pending confirmation by the owner
-7. Confirm the booking back to the customer in one clear sentence
+2. Ask the customer when they would roughly like the appointment — which day, and morning or afternoon preference
+3. Call get_day_availability:
+   - For a specific day: use days=1
+   - For "this week" or "anytime soon": use days=5
+   - For "next week" or when the customer is flexible: use days=7
+4. Tell the customer which time blocks are free in plain language (e.g. "Monday morning is free from 9am to 1pm, and afternoon from 2pm to 5pm — when suits you?")
+5. Once they choose a specific time, confirm the exact date and time back to them
+6. Ask for their name and phone number
+7. Call create_calendar_event:
+   - start_time: compute from the window's from_utc + the offset of the customer's chosen time within the window (e.g. window from_utc="2026-06-30T07:00:00.000Z" = 09:00 Prague, customer picks 10:30 → start_time="2026-06-30T08:30:00.000Z")
+   - end_time: start_time + appointment duration in minutes
+8. Confirm the booking in one clear sentence
 
 Rules:
 - Keep every response SHORT — this is a phone call. One or two sentences maximum.
 - Speak naturally, warmly, and professionally.
 - Always respond in the same language the customer uses.
-- Never make up available times — always call get_available_slots first.
+- Never make up available times — always call get_day_availability first.
+- Never book a time outside the free windows returned by get_day_availability.
 - If the customer has an urgent issue (emergency, safety), tell them to call emergency services.
 
 Today is ${getTodayLabel()}.`;
@@ -106,14 +113,23 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
     tools.push(
       {
         type: "function",
-        name: "get_available_slots",
-        description: `Get available appointment slots from the business calendar. Calendar project: ${calendarProjectId}. Always ask for preferred timeframe before calling this.`,
+        name: "get_day_availability",
+        description: `Get free time windows from the business calendar for one or more days. Returns blocks of available time, not individual slots — use these to tell the customer which hours are free, then let them pick a specific time within those blocks. Calendar project: ${calendarProjectId}. Always ask the customer which day (and rough time preference) before calling.`,
         parameters: {
           type: "object",
           properties: {
-            from_date: { type: "string", description: "Earliest date to search, YYYY-MM-DD (Prague timezone)." },
-            from_time: { type: "string", description: "Optional earliest time of day, HH:MM 24h format." },
-            duration_minutes: { type: "number", description: `Appointment duration in minutes. Default: ${settings?.appointment_duration ?? 60}.` },
+            from_date: {
+              type: "string",
+              description: "Starting date to check, YYYY-MM-DD (Prague timezone). Use today's date if the customer says 'today' or 'as soon as possible'.",
+            },
+            days: {
+              type: "number",
+              description: "How many calendar days to check starting from from_date. Use 1 for a specific day, 5 when customer says 'this week', 7 when customer is flexible or says 'next week'.",
+            },
+            duration_minutes: {
+              type: "number",
+              description: `Appointment duration in minutes. Default: ${settings?.appointment_duration ?? 60}.`,
+            },
           },
           required: ["from_date"],
         },

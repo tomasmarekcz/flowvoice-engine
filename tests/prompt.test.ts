@@ -47,7 +47,7 @@ describe("buildPromptFromSettings", () => {
 
   it("default prompt contains calendar instructions", () => {
     const prompt = buildPromptFromSettings(null);
-    expect(prompt).toContain("get_available_slots");
+    expect(prompt).toContain("get_day_availability");
     expect(prompt).toContain("create_calendar_event");
   });
 });
@@ -56,14 +56,14 @@ describe("buildTools", () => {
   it("returns calendar tools when calendar capability is true", () => {
     const tools = buildTools({ ...BASE, capabilities: { calendar: true } });
     const names = tools.map((t) => t.name);
-    expect(names).toContain("get_available_slots");
+    expect(names).toContain("get_day_availability");
     expect(names).toContain("create_calendar_event");
   });
 
   it("returns no calendar tools when calendar capability is false", () => {
     const tools = buildTools({ ...BASE, capabilities: { calendar: false } });
     const names = tools.map((t) => t.name);
-    expect(names).not.toContain("get_available_slots");
+    expect(names).not.toContain("get_day_availability");
     expect(names).not.toContain("create_calendar_event");
   });
 
@@ -96,13 +96,13 @@ describe("buildTools", () => {
   it("falls back to calendar tools when settings is null", () => {
     const tools = buildTools(null);
     const names = tools.map((t) => t.name);
-    expect(names).toContain("get_available_slots");
+    expect(names).toContain("get_day_availability");
     expect(names).toContain("create_calendar_event");
   });
 
-  it("includes calendar_project_id in get_available_slots description", () => {
+  it("includes calendar_project_id in get_day_availability description", () => {
     const tools = buildTools({ ...BASE, _calendar_project_id: "my-cal-project" });
-    const slot = tools.find((t) => t.name === "get_available_slots")!;
+    const slot = tools.find((t) => t.name === "get_day_availability")!;
     expect(slot.description).toContain("my-cal-project");
   });
 
