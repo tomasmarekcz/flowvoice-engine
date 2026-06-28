@@ -12,7 +12,7 @@ export async function handleBrowserConnection(
   const projectId = params.get("project_id");
   logger.info("browser client connected", { project_id: projectId ?? "none" });
 
-  const session = new CallSession(projectId, null, {
+  const session = new CallSession(projectId, null, null, {
     sendAudio: (pcm24Base64) => {
       if (ws.readyState === WS.OPEN) {
         ws.send(JSON.stringify({ type: "response.output_audio.delta", delta: pcm24Base64 }));
