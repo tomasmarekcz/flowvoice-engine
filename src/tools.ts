@@ -44,13 +44,28 @@ export async function executeTool(
       const r = await fetch(`${base}/api/web-search?${params}`);
       result = await r.json();
     } else if (name === "create_calendar_event") {
+      let startTime = args["start_time"];
+      let endTime = args["end_time"];
+
+      // Fallback: if AI passed slot_id instead of start_time/end_time, decode it
+      if (!startTime && args["slot_id"]) {
+        try {
+          const parts = Buffer.from(String(args["slot_id"]), "base64url").toString("utf8").split("|");
+          if (parts.length >= 3) {
+            startTime = parts[1];
+            const durationMin = parseInt(parts[2], 10) || 60;
+            endTime = new Date(new Date(startTime as string).getTime() + durationMin * 60_000).toISOString();
+          }
+        } catch { /* ignore malformed slot_id */ }
+      }
+
       const r = await fetch(`${base}/api/calendar/events?project_id=${calendarProjectId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: args["title"],
-          start_time: args["start_time"],
-          end_time: args["end_time"],
+          title: args["title"] ?? "Appointment",
+          start_time: startTime,
+          end_time: endTime,
           customer_name: args["customer_name"] ?? null,
           customer_phone: args["customer_phone"] ?? null,
           notes: args["notes"] ?? null,
