@@ -1,9 +1,10 @@
 import { WebSocket } from "ws";
-import { CallLogger, generateCallSummary } from "./call-logger";
-import { loadAssistantSettings } from "./config";
+import { CallLogger, generateCallSummary, SmsOptions } from "./call-logger";
+import { loadAssistantSettings, AssistantSettings } from "./config";
 import { logger } from "./logger";
 import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
+import { sendSmsNotifications } from "./sms";
 
 export interface SessionCallbacks {
   sendAudio: (pcm24Base64: string) => void;
@@ -19,6 +20,7 @@ export class CallSession {
   private logger: CallLogger;
   private calendarProjectId = "admin-test";
   private ended = false;
+  private settings: AssistantSettings | null = null;
 
   constructor(
     projectId: string | null,
@@ -42,6 +44,7 @@ export class CallSession {
       this.logger.createCall(this.callerPhone),
     ]);
 
+    this.settings = settings;
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
 
     const instructions = buildPromptFromSettings(settings);
@@ -124,8 +127,30 @@ export class CallSession {
     logger.info("session ending, generating summary");
     if (this.openaiWs?.readyState === WebSocket.OPEN) this.openaiWs.close();
     const apiKey = process.env.OPENAI_API_KEY ?? "";
-    const { title, summary } = await generateCallSummary(apiKey, this.logger.transcript);
-    await this.logger.finalizeCall(title, summary);
+
+    const smsOptions: SmsOptions | undefined = this.settings
+      ? {
+          smsOwnerEnabled: this.settings.sms_owner_enabled ?? false,
+          smsCallerEnabled: this.settings.sms_caller_enabled ?? false,
+          smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
+          smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
+        }
+      : undefined;
+
+    const { title, summary, ownerSms, callerSms } = await generateCallSummary(
+      apiKey,
+      this.logger.transcript,
+      smsOptions
+    );
+
+    const { ownerSent, callerSent } = await sendSmsNotifications({
+      ownerSms,
+      ownerPhone: this.settings?.owner_phone ?? null,
+      callerSms,
+      callerPhone: this.callerPhone,
+    });
+
+    await this.logger.finalizeCall(title, summary, ownerSent, callerSent);
   }
 
   private async handleOpenAIMessage(raw: string): Promise<void> {
