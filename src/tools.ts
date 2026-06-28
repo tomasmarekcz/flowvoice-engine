@@ -24,6 +24,18 @@ export async function executeTool(
       });
       const r = await fetch(`${base}/api/calendar/slots?${params}`);
       result = await r.json();
+    } else if (name === "get_day_availability") {
+      const fromDate = args["from_date"]
+        ? String(args["from_date"])
+        : new Date().toISOString().slice(0, 10);
+      const params = new URLSearchParams({
+        project_id: calendarProjectId,
+        from: fromDate,
+        days: String(args["days"] ?? 7),
+        ...(args["duration_minutes"] ? { duration: String(args["duration_minutes"]) } : {}),
+      });
+      const r = await fetch(`${base}/api/calendar/windows?${params}`);
+      result = await r.json();
     } else if (name === "web_search") {
       const params = new URLSearchParams({
         project_id: calendarProjectId,
