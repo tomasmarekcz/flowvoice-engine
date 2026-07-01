@@ -29,37 +29,36 @@ const BASE: AssistantSettings = {
 };
 
 describe("buildPromptFromSettings", () => {
-  it("returns default Alex prompt when settings is null", () => {
+  it("always contains base prompt and today's date", () => {
     const prompt = buildPromptFromSettings(null);
-    expect(prompt).toContain("Alex");
+    expect(prompt).toContain("professional phone assistant");
     expect(prompt).toContain("Today is");
   });
 
-  it("returns default Alex prompt when system_prompt is null", () => {
+  it("does not include business instructions section when system_prompt is null", () => {
     const prompt = buildPromptFromSettings({ ...BASE, system_prompt: null });
-    expect(prompt).toContain("Alex");
+    expect(prompt).not.toContain("BUSINESS INSTRUCTIONS");
   });
 
-  it("returns default Alex prompt when system_prompt is empty string", () => {
+  it("does not include business instructions section when system_prompt is empty string", () => {
     const prompt = buildPromptFromSettings({ ...BASE, system_prompt: "   " });
-    expect(prompt).toContain("Alex");
+    expect(prompt).not.toContain("BUSINESS INSTRUCTIONS");
   });
 
-  it("uses custom system_prompt when provided", () => {
+  it("includes business instructions section when system_prompt is provided", () => {
     const prompt = buildPromptFromSettings({ ...BASE, system_prompt: "You are Petra." });
+    expect(prompt).toContain("BUSINESS INSTRUCTIONS");
     expect(prompt).toContain("Petra");
-    expect(prompt).not.toContain("Alex");
   });
 
-  it("appends today's date to custom prompt", () => {
-    const prompt = buildPromptFromSettings({ ...BASE, system_prompt: "Custom instructions." });
-    expect(prompt).toMatch(/Today is \w+/);
-  });
-
-  it("default prompt contains calendar instructions", () => {
+  it("always contains tools preamble", () => {
     const prompt = buildPromptFromSettings(null);
-    expect(prompt).toContain("get_day_availability");
-    expect(prompt).toContain("create_calendar_event");
+    expect(prompt).toContain("===TOOLS===");
+  });
+
+  it("always contains business context section", () => {
+    const prompt = buildPromptFromSettings(null);
+    expect(prompt).toContain("===BUSINESS CONTEXT===");
   });
 });
 

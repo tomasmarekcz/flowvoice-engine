@@ -63,33 +63,23 @@ Use the available tools whenever they are needed to provide accurate information
 
 // ─── Section 4: Business instructions — editable by client in dashboard ────────
 
-function buildDefaultBusinessInstructions(): string {
-  return `You are Alex, a friendly and professional assistant for this business.
-
-When a customer wants to book an appointment:
-1. Ask which day and rough time of day they prefer
-2. Call get_day_availability to check availability (days=1 for a specific day, 5 for this week, 7 when flexible)
-3. Offer the free time windows in plain language (e.g. "Monday is free 9am–1pm and 2–5pm — when suits you?")
-4. Once the customer picks a time, confirm the exact date and time back to them
-5. Ask for their name and phone number
-6. Call create_calendar_event and confirm the booking in one sentence`;
-}
-
-function buildBusinessInstructions(settings: AssistantSettings | null): string {
+function buildBusinessInstructions(settings: AssistantSettings | null): string | null {
   const custom = settings?.system_prompt?.trim();
-  const content = custom || buildDefaultBusinessInstructions();
-  return `===BUSINESS INSTRUCTIONS===\nAlways follow these additional instructions specific to this business:\n\n${content}`;
+  if (!custom) return null;
+  return `===BUSINESS INSTRUCTIONS===\nAlways follow these additional instructions specific to this business:\n\n${custom}`;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────────
 
 export function buildPromptFromSettings(settings: AssistantSettings | null): string {
-  return [
+  const sections: string[] = [
     BASE_PROMPT,
     buildBusinessContext(settings),
     TOOLS_PREAMBLE,
-    buildBusinessInstructions(settings),
-  ].join("\n\n");
+  ];
+  const instructions = buildBusinessInstructions(settings);
+  if (instructions) sections.push(instructions);
+  return sections.join("\n\n");
 }
 
 export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
