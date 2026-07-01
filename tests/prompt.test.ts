@@ -15,6 +15,17 @@ const BASE: AssistantSettings = {
   enquiries_required_fields: null,
   calendar_id: null,
   _calendar_project_id: "test-cal",
+  sms_owner_enabled: false,
+  sms_caller_enabled: false,
+  sms_owner_instructions: null,
+  sms_caller_instructions: null,
+  owner_phone: null,
+  _project_name: null,
+  _project_industry: null,
+  _project_description: null,
+  _project_website: null,
+  _project_language: null,
+  _service_names: [],
 };
 
 describe("buildPromptFromSettings", () => {
