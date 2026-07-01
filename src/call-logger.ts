@@ -193,6 +193,13 @@ export class CallLogger {
   }
 }
 
+const DEFAULT_OWNER_SMS_INSTRUCTIONS =
+  "Summarise who called, what they need, and what action is required.";
+const DEFAULT_CALLER_SMS_INSTRUCTIONS =
+  "Thank the caller, briefly confirm what was agreed, and say we will be in touch.";
+
+export { DEFAULT_OWNER_SMS_INSTRUCTIONS, DEFAULT_CALLER_SMS_INSTRUCTIONS };
+
 export async function generateCallSummary(
   apiKey: string,
   transcript: TranscriptEntry[],
@@ -200,20 +207,34 @@ export async function generateCallSummary(
 ): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null }> {
   if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null };
 
-  const needOwnerSms = smsOptions?.smsOwnerEnabled && !!smsOptions.smsOwnerInstructions;
-  const needCallerSms = smsOptions?.smsCallerEnabled && !!smsOptions.smsCallerInstructions;
+  const needOwnerSms = !!smsOptions?.smsOwnerEnabled;
+  const needCallerSms = !!smsOptions?.smsCallerEnabled;
 
-  const smsOwnerPart = needOwnerSms
-    ? `\n- "owner_sms": SMS for the business owner (max 160 chars). Instructions: ${smsOptions!.smsOwnerInstructions}`
-    : "";
-  const smsCallerPart = needCallerSms
-    ? `\n- "caller_sms": SMS for the caller (max 160 chars). Instructions: ${smsOptions!.smsCallerInstructions}`
-    : "";
+  const ownerInstr = smsOptions?.smsOwnerInstructions?.trim() || DEFAULT_OWNER_SMS_INSTRUCTIONS;
+  const callerInstr = smsOptions?.smsCallerInstructions?.trim() || DEFAULT_CALLER_SMS_INSTRUCTIONS;
 
-  const hasSms = smsOwnerPart || smsCallerPart;
-  const responseShape = `{"title": "...", "summary": "..."${needOwnerSms ? ', "owner_sms": "..."' : ""}${needCallerSms ? ', "caller_sms": "..."' : ""}}`;
+  const smsParts = [
+    needOwnerSms
+      ? `\n* owner_sms: Write an SMS for the business owner, maximum 160 characters.\n    Follow these instructions: ${ownerInstr}\n    Include only information supported by the conversation. Make the message immediately understandable without requiring the owner to read the transcript.`
+      : "",
+    needCallerSms
+      ? `\n* caller_sms: Write an SMS for the caller, maximum 160 characters.\n    Follow these instructions: ${callerInstr}\n    Write it as a natural message from the business. Include only confirmed information and never invent dates, times, prices, promises, or next steps.`
+      : "",
+  ].join("");
 
-  const systemPrompt = `Summarize this business phone call. Generate a short title (max 6 words) and a one-sentence summary. Match the language of the conversation.${hasSms ? " Also generate:" : ""}${smsOwnerPart}${smsCallerPart}\nRespond ONLY as JSON: ${responseShape}`;
+  const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}}`;
+
+  const systemPrompt = `You are processing a completed business phone call.
+
+Based only on the conversation, generate:
+
+* title: A clear, specific title of up to 6 words that describes the caller's main reason for calling or the outcome of the call. Prefer concrete details such as the requested service, appointment type, problem, or customer intent. Avoid generic titles such as "Customer call", "General inquiry", or "Phone conversation".
+* summary: One concise sentence summarizing the most important information from the call. Include what the caller wanted, any relevant details they provided, and the agreed outcome or next step. Do not include unimportant small talk or repeat information.
+
+Use the language primarily spoken by the caller.${smsParts ? "\n\nAlso generate:" + smsParts : ""}
+
+Return valid JSON only, with no markdown or additional text:
+${responseShape}`;
 
   const lines = transcript
     .map((t) => `${t.role === "user" ? "Customer" : "Assistant"}: ${t.text}`)
@@ -227,10 +248,10 @@ export async function generateCallSummary(
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: lines.slice(0, 4000) },
+          { role: "user", content: lines.slice(0, 6000) },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 300,
+        max_tokens: 400,
       }),
     });
     const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
