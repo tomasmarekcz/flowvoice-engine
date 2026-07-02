@@ -139,11 +139,40 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
     tools.push(
       {
         type: "function",
-        name: "get_day_availability",
-        description: `Get free time windows from the business calendar for one or more days. Returns blocks of available time, not individual slots — use these to tell the customer which hours are free, then let them pick a specific time within those blocks. Calendar project: ${calendarProjectId}. Always ask the customer which day (and rough time preference) before calling.`,
+        name: "get_services",
+        description: "Get the list of services this business offers. Call this before booking to get service IDs, duration types, and durations. You must call this before get_day_availability if you don't already have a service_id.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        type: "function",
+        name: "get_resources",
+        description: "Get the available resources (staff, machines, etc.) for a service. Optional — get_day_availability returns resource availability automatically. Call this only if the customer specifically asks who is available.",
         parameters: {
           type: "object",
           properties: {
+            service_id: {
+              type: "string",
+              description: "The service ID to filter resources by. Omit to get all resources.",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        type: "function",
+        name: "get_day_availability",
+        description: `Get available time windows from the business calendar for one or more days. Returns blocks of free time per day with which resources are available. Call get_services first to get a service_id. Calendar project: ${calendarProjectId}. Always ask the customer which day (and rough time preference) before calling.`,
+        parameters: {
+          type: "object",
+          properties: {
+            service_id: {
+              type: "string",
+              description: "The ID of the service being booked — call get_services first if you don't have it.",
+            },
             from_date: {
               type: "string",
               description: "Starting date to check, YYYY-MM-DD (Prague timezone). Use today's date if the customer says 'today' or 'as soon as possible'.",
@@ -152,10 +181,6 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
               type: "number",
               description: "How many calendar days to check starting from from_date. Use 1 for a specific day, 5 when customer says 'this week', 7 when customer is flexible or says 'next week'.",
             },
-            duration_minutes: {
-              type: "number",
-              description: `Appointment duration in minutes. Default: ${settings?.appointment_duration ?? 60}.`,
-            },
           },
           required: ["from_date"],
         },
@@ -163,7 +188,7 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
       {
         type: "function",
         name: "create_calendar_event",
-        description: "Book an appointment after the customer confirms a specific slot. Created as pending_review.",
+        description: "Book an appointment after the customer confirms a specific slot. Created as pending_review. Pick the first available resource from the get_day_availability response and inform the customer which resource you booked.",
         parameters: {
           type: "object",
           properties: {
@@ -173,6 +198,8 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
             customer_name: { type: "string", description: "Customer name" },
             customer_phone: { type: "string", description: "Customer phone" },
             notes: { type: "string", description: "Optional notes" },
+            service_id: { type: "string", description: "The service ID being booked." },
+            resource_id: { type: "string", description: "The resource ID chosen from get_day_availability response." },
           },
           required: ["start_time", "end_time", "title"],
         },

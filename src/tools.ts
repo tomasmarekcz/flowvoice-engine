@@ -24,6 +24,15 @@ export async function executeTool(
       });
       const r = await fetch(`${base}/api/calendar/slots?${params}`);
       result = await r.json();
+    } else if (name === "get_services") {
+      const params = new URLSearchParams({ project_id: projectId });
+      const r = await fetch(`${base}/api/services?${params}`);
+      result = await r.json();
+    } else if (name === "get_resources") {
+      const params = new URLSearchParams({ project_id: projectId });
+      if (args["service_id"]) params.set("service_id", String(args["service_id"]));
+      const r = await fetch(`${base}/api/resources?${params}`);
+      result = await r.json();
     } else if (name === "get_day_availability") {
       const fromDate = args["from_date"]
         ? String(args["from_date"])
@@ -32,8 +41,8 @@ export async function executeTool(
         project_id: calendarProjectId,
         from: fromDate,
         days: String(args["days"] ?? 7),
-        ...(args["duration_minutes"] ? { duration: String(args["duration_minutes"]) } : {}),
       });
+      if (args["service_id"]) params.set("service_id", String(args["service_id"]));
       const r = await fetch(`${base}/api/calendar/windows?${params}`);
       result = await r.json();
     } else if (name === "web_search") {
@@ -69,6 +78,8 @@ export async function executeTool(
           customer_name: args["customer_name"] ?? null,
           customer_phone: args["customer_phone"] ?? null,
           notes: args["notes"] ?? null,
+          service_id: args["service_id"] ?? null,
+          resource_id: args["resource_id"] ?? null,
           status: "pending_review",
           created_by: "ai",
           event_kind: "work",
