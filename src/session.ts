@@ -51,11 +51,11 @@ export class CallSession {
     const tools = buildTools(settings);
     const voice = settings?.voice ?? "alloy";
 
-    this.logger.openaiPayload = { model: "gpt-realtime", voice, instructions, tools };
+    this.logger.openaiPayload = { model: "gpt-realtime-2", voice, instructions, tools };
 
     logger.info("connecting to OpenAI", { project_id: this.projectId ?? "none" });
 
-    const openaiWs = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-realtime", {
+    const openaiWs = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-realtime-2", {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     this.openaiWs = openaiWs;
@@ -72,7 +72,7 @@ export class CallSession {
           audio: {
             input: {
               format: { type: "audio/pcm", rate: 24000 },
-              transcription: { model: "gpt-4o-mini-transcribe" },
+              transcription: { model: "whisper-1" },
               turn_detection: {
                 type: "server_vad",
                 threshold: 0.5,
