@@ -124,6 +124,10 @@ export async function handleTwilioConnection(
           const typed = obj as Record<string, unknown>;
           if (typed?.["type"]) logger.debug("engine event to Twilio", { type: typed["type"] });
         },
+        endCall: () => {
+          logger.info("end_call: closing Twilio WS");
+          if (ws.readyState === WS.OPEN) ws.close();
+        },
       });
 
       try {

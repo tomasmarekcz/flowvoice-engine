@@ -9,6 +9,7 @@ import { sendSmsNotifications } from "./sms";
 export interface SessionCallbacks {
   sendAudio: (pcm24Base64: string) => void;
   sendJson: (obj: unknown) => void;
+  endCall: () => void;
 }
 
 export class CallSession {
@@ -187,6 +188,26 @@ export class CallSession {
     logger.info("executing tool", { name });
     let args: Record<string, unknown> = {};
     try { args = JSON.parse(argsJson); } catch { /* invalid json from model */ }
+
+    // end_call is handled entirely in the engine — no external API call needed
+    if (name === "end_call") {
+      const reason = (args["reason"] as string) ?? "conversation complete";
+      logger.info("end_call requested", { reason });
+      const toolResultMsg = {
+        type: "conversation.item.create",
+        item: { type: "function_call_output", call_id: callId, output: JSON.stringify({ status: "ok" }) },
+      };
+      this.logger.handleClientEvent(toolResultMsg);
+      if (this.openaiWs?.readyState === WebSocket.OPEN) {
+        this.openaiWs.send(JSON.stringify(toolResultMsg));
+        // No response.create — AI should not speak after hanging up
+      }
+      this.callbacks.sendJson({ type: "engine.tool_done", name });
+      // End session (generates summary) then close the call connection
+      this.end().catch((e) => logger.error("end_call session.end error", { err: e }));
+      setTimeout(() => this.callbacks.endCall(), 300);
+      return;
+    }
 
     const t0 = Date.now();
     const result = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId);

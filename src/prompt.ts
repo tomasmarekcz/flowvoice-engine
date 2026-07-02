@@ -180,5 +180,23 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
     );
   }
 
+  if (caps["end_call"]) {
+    tools.push({
+      type: "function",
+      name: "end_call",
+      description: "End the phone call when the conversation is fully complete — the customer's request has been handled, any actions have been confirmed, and there is nothing more to resolve. Always say a natural closing sentence before calling this. Never use it to avoid a difficult question or mid-conversation.",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: {
+            type: "string",
+            description: "Brief reason why the call is being ended (e.g. 'appointment booked', 'enquiry logged', 'question answered').",
+          },
+        },
+        required: ["reason"],
+      },
+    });
+  }
+
   return tools;
 }

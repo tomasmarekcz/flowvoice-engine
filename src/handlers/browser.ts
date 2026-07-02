@@ -21,6 +21,9 @@ export async function handleBrowserConnection(
     sendJson: (obj) => {
       if (ws.readyState === WS.OPEN) ws.send(JSON.stringify(obj));
     },
+    endCall: () => {
+      if (ws.readyState === WS.OPEN) ws.close();
+    },
   });
 
   try {
