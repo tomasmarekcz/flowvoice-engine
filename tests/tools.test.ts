@@ -54,7 +54,7 @@ describe("executeTool", () => {
 
     const result = await executeTool(
       "get_day_availability",
-      { from_date: "2026-06-30", days: 1, duration_minutes: 60 },
+      { from_date: "2026-06-30", days: 1 },
       "proj-1",
       "admin-test"
     );
@@ -64,7 +64,6 @@ describe("executeTool", () => {
     expect(url).toContain("project_id=admin-test");
     expect(url).toContain("from=2026-06-30");
     expect(url).toContain("days=1");
-    expect(url).toContain("duration=60");
     expect(result).toEqual(windowsResponse);
   });
 
