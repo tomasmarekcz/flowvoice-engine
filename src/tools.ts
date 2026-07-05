@@ -5,6 +5,7 @@ export async function executeTool(
   args: Record<string, unknown>,
   projectId: string,
   calendarProjectId: string,
+  dbCallId?: string,
 ): Promise<unknown> {
   const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
   const t0 = Date.now();
@@ -80,6 +81,7 @@ export async function executeTool(
           notes: args["notes"] ?? null,
           service_id: args["service_id"] ?? null,
           resource_id: args["resource_id"] ?? null,
+          source_conversation_id: dbCallId ?? null,
           status: "pending_review",
           created_by: "ai",
           event_kind: "work",

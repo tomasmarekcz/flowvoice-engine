@@ -210,7 +210,7 @@ export class CallSession {
     }
 
     const t0 = Date.now();
-    const result = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId);
+    const result = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined);
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
 
     this.callbacks.sendJson({ type: "engine.tool_done", name });
