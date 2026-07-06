@@ -152,7 +152,7 @@ export class CallSession {
       callerPhone: this.callerPhone,
     });
 
-    await this.logger.finalizeCall(title, summary, ownerSent, callerSent);
+    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSms, callerSms, emailOwner);
 
     // Send email notification if enabled
     if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {

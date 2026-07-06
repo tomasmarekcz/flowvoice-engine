@@ -164,7 +164,10 @@ export class CallLogger {
     aiTitle: string | null,
     aiSummary: string | null,
     smsOwnerSent = false,
-    smsCallerSent = false
+    smsCallerSent = false,
+    smsOwnerText: string | null = null,
+    smsCallerText: string | null = null,
+    emailOwnerText: string | null = null,
   ): Promise<void> {
     if (!this.enabled || !this.callId) return;
     const endMs = Date.now();
@@ -189,6 +192,9 @@ export class CallLogger {
           openai_payload: this.openaiPayload ?? null,
           sms_owner_sent: smsOwnerSent,
           sms_caller_sent: smsCallerSent,
+          sms_owner_text: smsOwnerText ?? null,
+          sms_caller_text: smsCallerText ?? null,
+          email_owner_text: emailOwnerText ?? null,
         }),
       });
       logger.info("call finalized", { call_id: this.callId, duration_seconds, turns: this.transcript.length });
