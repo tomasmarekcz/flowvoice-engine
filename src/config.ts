@@ -17,7 +17,9 @@ export interface AssistantSettings {
   sms_caller_enabled: boolean;
   sms_owner_instructions: string | null;
   sms_caller_instructions: string | null;
+  email_owner_enabled: boolean;
   owner_phone: string | null;
+  _owner_email?: string | null;
   // Joined from projects table
   _project_name?: string | null;
   _project_industry?: string | null;
@@ -59,7 +61,7 @@ export async function loadAssistantSettings(
 
     const [settingsRes, projectRes] = await Promise.all([
       fetch(`${url}/rest/v1/assistant_settings?project_id=eq.${projectId}&limit=1`, { headers }),
-      fetch(`${url}/rest/v1/projects?id=eq.${projectId}&select=owner_phone,name,industry,description,website,language&limit=1`, { headers }),
+      fetch(`${url}/rest/v1/projects?id=eq.${projectId}&select=owner_phone,owner_email,name,industry,description,website,language&limit=1`, { headers }),
     ]);
 
     const rows = (await settingsRes.json()) as AssistantSettings[];
@@ -69,6 +71,7 @@ export async function loadAssistantSettings(
     // Populate joined project fields
     const projectRows = (await projectRes.json()) as Array<{
       owner_phone: string | null;
+      owner_email: string | null;
       name: string | null;
       industry: string | null;
       description: string | null;
@@ -77,6 +80,7 @@ export async function loadAssistantSettings(
     }>;
     const proj = projectRows?.[0];
     settings.owner_phone = proj?.owner_phone ?? null;
+    settings._owner_email = proj?.owner_email ?? null;
     settings._project_name = proj?.name ?? null;
     settings._project_industry = proj?.industry ?? null;
     settings._project_description = proj?.description ?? null;

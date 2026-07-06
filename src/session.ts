@@ -135,10 +135,11 @@ export class CallSession {
           smsCallerEnabled: this.settings.sms_caller_enabled ?? false,
           smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
           smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
+          emailOwnerEnabled: this.settings.email_owner_enabled ?? false,
         }
       : undefined;
 
-    const { title, summary, ownerSms, callerSms } = await generateCallSummary(
+    const { title, summary, ownerSms, callerSms, emailOwner } = await generateCallSummary(
       apiKey,
       this.logger.transcript,
       smsOptions
@@ -152,6 +153,23 @@ export class CallSession {
     });
 
     await this.logger.finalizeCall(title, summary, ownerSent, callerSent);
+
+    // Send email notification if enabled
+    if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {
+      const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
+      fetch(`${base}/api/notify/call`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          call_id: this.logger.callId,
+          project_id: this.projectId,
+          email_body: emailOwner,
+          caller_phone: this.callerPhone,
+          ai_title: title,
+          duration_seconds: this.logger.callDurationSeconds,
+        }),
+      }).catch((e) => logger.error("notify/call error", { err: e }));
+    }
   }
 
   private async handleOpenAIMessage(raw: string): Promise<void> {

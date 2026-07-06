@@ -26,6 +26,7 @@ export interface SmsOptions {
   smsCallerEnabled: boolean;
   smsOwnerInstructions: string | null;
   smsCallerInstructions: string | null;
+  emailOwnerEnabled: boolean;
 }
 
 export class CallLogger {
@@ -39,6 +40,10 @@ export class CallLogger {
   private startMs = Date.now();
   private toolCalls: ToolCallEntry[] = [];
   private pending: Record<string, PendingToolCall> = {};
+
+  get callDurationSeconds(): number {
+    return Math.round((Date.now() - this.startMs) / 1000);
+  }
 
   private get enabled(): boolean {
     try { getSupabaseUrl(); getSupabaseHeaders(); return !!this.projectId; }
@@ -204,11 +209,12 @@ export async function generateCallSummary(
   apiKey: string,
   transcript: TranscriptEntry[],
   smsOptions?: SmsOptions
-): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null }> {
-  if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null };
+): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null }> {
+  if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null };
 
   const needOwnerSms = !!smsOptions?.smsOwnerEnabled;
   const needCallerSms = !!smsOptions?.smsCallerEnabled;
+  const needOwnerEmail = !!smsOptions?.emailOwnerEnabled;
 
   const ownerInstr = smsOptions?.smsOwnerInstructions?.trim() || DEFAULT_OWNER_SMS_INSTRUCTIONS;
   const callerInstr = smsOptions?.smsCallerInstructions?.trim() || DEFAULT_CALLER_SMS_INSTRUCTIONS;
@@ -220,9 +226,12 @@ export async function generateCallSummary(
     needCallerSms
       ? `\n* caller_sms: Write an SMS for the caller, maximum 160 characters.\n    Follow these instructions: ${callerInstr}\n    Write it as a natural message from the business. Include only confirmed information and never invent dates, times, prices, promises, or next steps.`
       : "",
+    needOwnerEmail
+      ? `\n* owner_email: Write a professional email body for the business owner summarising this call. 2-4 short paragraphs. Cover: who called and why, key details they provided, what was agreed or what needs action. Plain text only — no markdown, no subject line, no greeting/sign-off (those are added by the template). Be direct and informative.`
+      : "",
   ].join("");
 
-  const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}}`;
+  const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}${needOwnerEmail ? ',"owner_email":"…"' : ""}}`;
 
   const systemPrompt = `You are processing a completed business phone call.
 
@@ -251,21 +260,22 @@ ${responseShape}`;
           { role: "user", content: lines.slice(0, 6000) },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 400,
+        max_tokens: needOwnerEmail ? 800 : 400,
       }),
     });
     const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
     const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as {
-      title?: string; summary?: string; owner_sms?: string; caller_sms?: string;
+      title?: string; summary?: string; owner_sms?: string; caller_sms?: string; owner_email?: string;
     };
     return {
       title: parsed.title ?? null,
       summary: parsed.summary ?? null,
       ownerSms: parsed.owner_sms ?? null,
       callerSms: parsed.caller_sms ?? null,
+      emailOwner: parsed.owner_email ?? null,
     };
   } catch (e) {
     logger.error("generateCallSummary error", { err: e });
-    return { title: null, summary: null, ownerSms: null, callerSms: null };
+    return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null };
   }
 }
