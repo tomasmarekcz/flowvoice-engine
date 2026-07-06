@@ -260,7 +260,7 @@ ${responseShape}`;
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-4.5-mini",
+        model: "gpt-5.4-mini-2026-03-17",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: lines.slice(0, 6000) },
