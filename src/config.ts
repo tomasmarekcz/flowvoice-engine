@@ -41,6 +41,7 @@ export function getSupabaseUrl(): string {
 }
 
 export function getSupabaseHeaders(): Record<string, string> {
+  // Service role key only — this engine has no per-user auth context to scope RLS to.
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY not set");
   return {
