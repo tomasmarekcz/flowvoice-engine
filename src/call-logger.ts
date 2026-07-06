@@ -221,10 +221,10 @@ export async function generateCallSummary(
 
   const smsParts = [
     needOwnerSms
-      ? `\n* owner_sms: Write an SMS for the business owner, maximum 160 characters.\n    Follow these instructions: ${ownerInstr}\n    Include only information supported by the conversation. Make the message immediately understandable without requiring the owner to read the transcript.`
+      ? `\n* owner_sms: Write an SMS for the business owner, maximum 300 characters.\n    Follow these instructions: ${ownerInstr}\n    Include only information supported by the conversation. Make the message immediately understandable without requiring the owner to read the transcript.`
       : "",
     needCallerSms
-      ? `\n* caller_sms: Write an SMS for the caller, maximum 160 characters.\n    Follow these instructions: ${callerInstr}\n    Write it as a natural message from the business. Include only confirmed information and never invent dates, times, prices, promises, or next steps.`
+      ? `\n* caller_sms: Write an SMS for the caller, maximum 300 characters.\n    Follow these instructions: ${callerInstr}\n    Write it as a natural message from the business. Include only confirmed information and never invent dates, times, prices, promises, or next steps.`
       : "",
     needOwnerEmail
       ? `\n* owner_email: Write a professional email body for the business owner summarising this call. 2-4 short paragraphs. Cover: who called and why, key details they provided, what was agreed or what needs action. Plain text only — no markdown, no subject line, no greeting/sign-off (those are added by the template). Be direct and informative.`
@@ -254,13 +254,13 @@ ${responseShape}`;
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-4.1-mini",
+        model: "gpt-4.5-mini",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: lines.slice(0, 6000) },
         ],
         response_format: { type: "json_object" },
-        max_tokens: needOwnerEmail ? 800 : 400,
+        max_tokens: 2000,
       }),
     });
     const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
