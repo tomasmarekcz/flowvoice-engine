@@ -21,6 +21,7 @@ export interface AssistantSettings {
   owner_phone: string | null;
   greeting_enabled: boolean;
   greeting_message: string | null;
+  knowledge_top_n: number | null;
   _owner_email?: string | null;
   // Joined from projects table
   _project_name?: string | null;
