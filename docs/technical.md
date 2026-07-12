@@ -35,8 +35,9 @@ name/industry/description/website/language, owner phone/email),
 `calendars` (`_calendar_project_id`), and `event_types`
 (`_service_names`, active service names for the prompt). Also includes
 `greeting_enabled` / `greeting_message` for the optional opening greeting
-feature. Fields prefixed `_` are joined/derived, not columns on
-`assistant_settings` itself.
+feature and `knowledge_top_n` (number | null) for how many Qdrant chunks
+are returned per `search_knowledge` call (defaults to 5 if null). Fields
+prefixed `_` are joined/derived, not columns on `assistant_settings` itself.
 
 **Main exports:** `getSupabaseUrl()`, `getSupabaseHeaders()`,
 `loadAssistantSettings(projectId)`, `AssistantSettings` (interface).
@@ -48,6 +49,22 @@ feature. Fields prefixed `_` are joined/derived, not columns on
 `handlers/twilio.ts` and `call-logger.ts` (Supabase URL/headers for direct
 writes), `prompt.ts` (consumes `AssistantSettings` to build the prompt).
 
+## knowledge.ts
+
+**Purpose:** `searchKnowledge()` — embeds a natural-language query using
+OpenAI `text-embedding-3-small`, then searches the Qdrant `documents`
+collection filtered by `project_id`, and returns the top-N chunks as
+`{ text, filename, score }` objects. Called during live calls by
+`tools.ts` when the `search_knowledge` tool fires.
+
+**Main exports:** `searchKnowledge(query, projectId, topN)` →
+`Promise<KnowledgeChunk[]>`, `KnowledgeChunk` (interface).
+
+**Depends on:** `@qdrant/js-client-rest` (`QDRANT_URL`,
+`QDRANT_API_KEY` env vars), `openai` (`OPENAI_API_KEY`).
+
+**Depended on by:** `tools.ts` (`search_knowledge` handler).
+
 ## session.ts
 
 **Purpose:** `CallSession` — the core per-call state machine. Loads
@@ -58,6 +75,8 @@ dispatches tool calls, and on call end generates the summary, sends SMS,
 and (if enabled) triggers the owner email notification. When
 `greeting_enabled` is true, fires `response.create` on the
 `session.updated` event so the assistant speaks first at call start.
+Passes `settings.knowledge_top_n` (defaulting to 5) to `executeTool` so
+the `search_knowledge` handler knows how many Qdrant chunks to return.
 
 **Main exports:** `CallSession` (class: `start()`, `handleClientAudio()`,
 `handleClientEvent()`, `end()`), `SessionCallbacks` (interface:
@@ -74,18 +93,18 @@ construct a `CallSession` per connection).
 ## tools.ts
 
 **Purpose:** `executeTool()` — dispatches a named tool call (as requested
-by the OpenAI Realtime model) to the corresponding `flowvoice` dashboard
-API route over HTTP (`FRONTEND_API_URL`, defaults to
-`http://localhost:3000`). Handles `get_available_slots`, `get_services`,
-`get_resources`, `get_day_availability`, `web_search`,
-`create_calendar_event` (including decoding a `slot_id` fallback into
-`start_time`/`end_time`), and `create_enquiry`. `end_call` is handled
-entirely inside `session.ts`, not here.
+by the OpenAI Realtime model) to the corresponding handler. HTTP-backed
+tools (`get_available_slots`, `get_services`, `get_resources`,
+`get_day_availability`, `web_search`, `create_calendar_event` (including
+decoding a `slot_id` fallback), `create_enquiry`) call the `flowvoice`
+dashboard API. `search_knowledge` is handled locally via `knowledge.ts`
+(Qdrant + OpenAI embeddings — no HTTP hop to the dashboard). `end_call`
+is handled entirely inside `session.ts`, not here.
 
-**Main exports:** `executeTool(name, args, projectId, calendarProjectId, dbCallId?)`.
+**Main exports:** `executeTool(name, args, projectId, calendarProjectId, dbCallId?, knowledgeTopN?)`.
 
-**Depends on:** `logger.ts`; HTTP calls into the `flowvoice` dashboard's
-`/api/calendar/slots`, `/api/services`, `/api/resources`,
+**Depends on:** `logger.ts`, `knowledge.ts`; HTTP calls into the `flowvoice`
+dashboard's `/api/calendar/slots`, `/api/services`, `/api/resources`,
 `/api/calendar/windows`, `/api/web-search`, `/api/calendar/events`,
 `/api/enquiries` routes (see that repo's `docs/technical.md`).
 
@@ -100,7 +119,10 @@ call, assembled from up to five sections: (1) universal base prompt
 active service names, today's date in `Europe/Prague`), (3) tools
 preamble, (4) optional client-editable business instructions, (5) optional
 `===CALL START===` greeting rule — only appended when `greeting_enabled`
-is true and `greeting_message` is non-empty.
+is true and `greeting_message` is non-empty. Also builds the tools array
+via `buildTools()`, which now includes `search_knowledge` when the
+`business_knowledge` capability is on, with a description that mentions
+the configured `knowledge_top_n` value.
 
 **Main exports:** `buildPromptFromSettings(settings)`, `buildTools(settings)`,
 `OpenAITool` (interface).
