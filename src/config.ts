@@ -19,6 +19,8 @@ export interface AssistantSettings {
   sms_caller_instructions: string | null;
   email_owner_enabled: boolean;
   owner_phone: string | null;
+  greeting_enabled: boolean;
+  greeting_message: string | null;
   _owner_email?: string | null;
   // Joined from projects table
   _project_name?: string | null;

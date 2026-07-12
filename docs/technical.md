@@ -33,8 +33,10 @@ that manually routes upgrade requests by path (`/ws/twilio` vs
 start of a call, including fields joined in from `projects` (business
 name/industry/description/website/language, owner phone/email),
 `calendars` (`_calendar_project_id`), and `event_types`
-(`_service_names`, active service names for the prompt). Fields prefixed
-`_` are joined/derived, not columns on `assistant_settings` itself.
+(`_service_names`, active service names for the prompt). Also includes
+`greeting_enabled` / `greeting_message` for the optional opening greeting
+feature. Fields prefixed `_` are joined/derived, not columns on
+`assistant_settings` itself.
 
 **Main exports:** `getSupabaseUrl()`, `getSupabaseHeaders()`,
 `loadAssistantSettings(projectId)`, `AssistantSettings` (interface).
@@ -53,7 +55,9 @@ assistant settings, opens the OpenAI Realtime WebSocket, sends the
 `session.update` with instructions/tools/voice, relays audio and events
 between the transport (Twilio or browser) and OpenAI via callbacks,
 dispatches tool calls, and on call end generates the summary, sends SMS,
-and (if enabled) triggers the owner email notification.
+and (if enabled) triggers the owner email notification. When
+`greeting_enabled` is true, fires `response.create` on the
+`session.updated` event so the assistant speaks first at call start.
 
 **Main exports:** `CallSession` (class: `start()`, `handleClientAudio()`,
 `handleClientEvent()`, `end()`), `SessionCallbacks` (interface:
@@ -90,13 +94,13 @@ entirely inside `session.ts`, not here.
 ## prompt.ts
 
 **Purpose:** Builds the actual instructions string sent to OpenAI for a
-call, from three layers: a hardcoded universal base prompt (identical for
-every business, never editable), a business-context block built from the
-loaded `AssistantSettings` (name, industry, description, website,
-language, active service names, today's date), and (further down the
-file) a tools preamble plus per-capability tool schemas. Also computes
-`getTodayLabel()` in the `Europe/Prague` timezone so the model always
-knows the current date.
+call, assembled from up to five sections: (1) universal base prompt
+(hardcoded, never editable), (2) business-context block from
+`AssistantSettings` (name, industry, description, website, language,
+active service names, today's date in `Europe/Prague`), (3) tools
+preamble, (4) optional client-editable business instructions, (5) optional
+`===CALL START===` greeting rule — only appended when `greeting_enabled`
+is true and `greeting_message` is non-empty.
 
 **Main exports:** `buildPromptFromSettings(settings)`, `buildTools(settings)`,
 `OpenAITool` (interface).

@@ -69,6 +69,15 @@ function buildBusinessInstructions(settings: AssistantSettings | null): string |
   return `===BUSINESS INSTRUCTIONS===\nAlways follow these additional instructions specific to this business:\n\n${custom}`;
 }
 
+// ─── Section 5: Greeting rule — injected when greeting_enabled is true ─────────
+
+function buildGreetingRule(settings: AssistantSettings | null): string | null {
+  if (!settings?.greeting_enabled) return null;
+  const msg = settings.greeting_message?.trim();
+  if (!msg) return null;
+  return `===CALL START===\nWhen this call connects, speak first. Say exactly this — word for word:\n\n"${msg}"`;
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────────
 
 export function buildPromptFromSettings(settings: AssistantSettings | null): string {
@@ -79,6 +88,8 @@ export function buildPromptFromSettings(settings: AssistantSettings | null): str
   ];
   const instructions = buildBusinessInstructions(settings);
   if (instructions) sections.push(instructions);
+  const greeting = buildGreetingRule(settings);
+  if (greeting) sections.push(greeting);
   return sections.join("\n\n");
 }
 

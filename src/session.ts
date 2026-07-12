@@ -184,6 +184,13 @@ export class CallSession {
       logger.debug("← openai event", { type });
     }
 
+    if (type === "session.updated" && this.settings?.greeting_enabled && this.settings?.greeting_message?.trim()) {
+      logger.info("triggering greeting response");
+      if (this.openaiWs?.readyState === WebSocket.OPEN) {
+        this.openaiWs.send(JSON.stringify({ type: "response.create" }));
+      }
+    }
+
     this.logger.handleOpenAIEvent(msg);
 
     if (type === "response.output_audio.delta") {
