@@ -20,6 +20,10 @@ const BASE: AssistantSettings = {
   sms_owner_instructions: null,
   sms_caller_instructions: null,
   owner_phone: null,
+  email_owner_enabled: false,
+  greeting_enabled: false,
+  greeting_message: null,
+  knowledge_top_n: null,
   _project_name: null,
   _project_industry: null,
   _project_description: null,
@@ -143,5 +147,30 @@ describe("buildTools", () => {
     });
     const enq = tools.find((t) => t.name === "create_enquiry")!;
     expect(enq.description).toContain("the customer mentions insurance");
+  });
+
+  it("does not include search_knowledge when business_knowledge capability is off", () => {
+    const tools = buildTools({ ...BASE, capabilities: { business_knowledge: false } });
+    expect(tools.find((t) => t.name === "search_knowledge")).toBeUndefined();
+  });
+
+  it("includes search_knowledge tool when business_knowledge capability is on", () => {
+    const tools = buildTools({ ...BASE, capabilities: { business_knowledge: true } });
+    const tool = tools.find((t) => t.name === "search_knowledge");
+    expect(tool).toBeDefined();
+    expect(tool!.parameters.properties).toHaveProperty("query");
+    expect(tool!.parameters.required).toContain("query");
+  });
+
+  it("search_knowledge description mentions configured topN", () => {
+    const tools = buildTools({ ...BASE, capabilities: { business_knowledge: true }, knowledge_top_n: 8 });
+    const tool = tools.find((t) => t.name === "search_knowledge")!;
+    expect(tool.description).toContain("8");
+  });
+
+  it("search_knowledge description falls back to 5 when knowledge_top_n is null", () => {
+    const tools = buildTools({ ...BASE, capabilities: { business_knowledge: true }, knowledge_top_n: null });
+    const tool = tools.find((t) => t.name === "search_knowledge")!;
+    expect(tool.description).toContain("5");
   });
 });

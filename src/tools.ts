@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { searchKnowledge } from "./knowledge";
 
 export async function executeTool(
   name: string,
@@ -6,6 +7,7 @@ export async function executeTool(
   projectId: string,
   calendarProjectId: string,
   dbCallId?: string,
+  knowledgeTopN?: number,
 ): Promise<unknown> {
   const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
   const t0 = Date.now();
@@ -103,6 +105,11 @@ export async function executeTool(
         }),
       });
       result = await r.json();
+    } else if (name === "search_knowledge") {
+      const query = String(args["query"] ?? "");
+      const topN = knowledgeTopN ?? 5;
+      const chunks = await searchKnowledge(query, projectId, topN);
+      result = { chunks };
     } else {
       return { error: `Unknown tool: ${name}` };
     }

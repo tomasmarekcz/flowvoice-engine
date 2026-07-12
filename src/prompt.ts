@@ -218,6 +218,25 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
     );
   }
 
+  if (caps["business_knowledge"]) {
+    const topN = settings?.knowledge_top_n ?? 5;
+    tools.push({
+      type: "function",
+      name: "search_knowledge",
+      description: `Search the business's uploaded documents to answer customer questions. Returns the top ${topN} most relevant passages. Use when the customer asks something specific about this business that you don't know from the instructions.`,
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "A concise natural-language search query describing what the customer wants to know.",
+          },
+        },
+        required: ["query"],
+      },
+    });
+  }
+
   if (caps["end_call"]) {
     tools.push({
       type: "function",
