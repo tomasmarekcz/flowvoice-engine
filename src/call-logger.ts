@@ -29,6 +29,23 @@ export interface SmsOptions {
   emailOwnerEnabled: boolean;
 }
 
+export interface TokenUsage {
+  realtimeAudioIn: number;
+  realtimeAudioOut: number;
+  realtimeTextIn: number;
+  realtimeTextOut: number;
+  summaryIn: number;
+  summaryOut: number;
+  searchEmbedding: number;
+}
+
+export const ZERO_TOKEN_USAGE: TokenUsage = {
+  realtimeAudioIn: 0, realtimeAudioOut: 0,
+  realtimeTextIn: 0,  realtimeTextOut: 0,
+  summaryIn: 0,       summaryOut: 0,
+  searchEmbedding: 0,
+};
+
 export class CallLogger {
   callId: string | null = null;
   transcript: TranscriptEntry[] = [];
@@ -168,6 +185,7 @@ export class CallLogger {
     smsOwnerText: string | null = null,
     smsCallerText: string | null = null,
     emailOwnerText: string | null = null,
+    tokenUsage: TokenUsage = ZERO_TOKEN_USAGE,
   ): Promise<void> {
     if (!this.enabled || !this.callId) return;
     const endMs = Date.now();
@@ -195,6 +213,13 @@ export class CallLogger {
           sms_owner_text: smsOwnerText ?? null,
           sms_caller_text: smsCallerText ?? null,
           email_owner_text: emailOwnerText ?? null,
+          realtime_audio_input_tokens:  tokenUsage.realtimeAudioIn,
+          realtime_audio_output_tokens: tokenUsage.realtimeAudioOut,
+          realtime_text_input_tokens:   tokenUsage.realtimeTextIn,
+          realtime_text_output_tokens:  tokenUsage.realtimeTextOut,
+          summary_input_tokens:         tokenUsage.summaryIn,
+          summary_output_tokens:        tokenUsage.summaryOut,
+          search_embedding_tokens:      tokenUsage.searchEmbedding,
         }),
       });
       logger.info("call finalized", { call_id: this.callId, duration_seconds, turns: this.transcript.length });
@@ -215,8 +240,8 @@ export async function generateCallSummary(
   apiKey: string,
   transcript: TranscriptEntry[],
   smsOptions?: SmsOptions
-): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null }> {
-  if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null };
+): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null; summaryInputTokens: number; summaryOutputTokens: number }> {
+  if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null, summaryInputTokens: 0, summaryOutputTokens: 0 };
 
   const needOwnerSms = !!smsOptions?.smsOwnerEnabled;
   const needCallerSms = !!smsOptions?.smsCallerEnabled;
@@ -269,7 +294,10 @@ ${responseShape}`;
         max_completion_tokens: 2000,
       }),
     });
-    const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    const data = (await res.json()) as {
+      choices: Array<{ message: { content: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
     const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as {
       title?: string; summary?: string; owner_sms?: string; caller_sms?: string; owner_email?: string;
     };
@@ -279,9 +307,11 @@ ${responseShape}`;
       ownerSms: parsed.owner_sms ?? null,
       callerSms: parsed.caller_sms ?? null,
       emailOwner: parsed.owner_email ?? null,
+      summaryInputTokens: data.usage?.prompt_tokens ?? 0,
+      summaryOutputTokens: data.usage?.completion_tokens ?? 0,
     };
   } catch (e) {
     logger.error("generateCallSummary error", { err: e });
-    return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null };
+    return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null, summaryInputTokens: 0, summaryOutputTokens: 0 };
   }
 }
