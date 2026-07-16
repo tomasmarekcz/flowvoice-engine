@@ -8,12 +8,13 @@ export async function executeTool(
   calendarProjectId: string,
   dbCallId?: string,
   knowledgeTopN?: number,
-): Promise<unknown> {
+): Promise<{ result: unknown; embeddingTokens: number }> {
   const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
   const t0 = Date.now();
 
   try {
     let result: unknown;
+    let embeddingTokens = 0;
 
     if (name === "get_available_slots") {
       const fromIso = args["from_date"]
@@ -108,16 +109,17 @@ export async function executeTool(
     } else if (name === "search_knowledge") {
       const query = String(args["query"] ?? "");
       const topN = knowledgeTopN ?? 5;
-      const chunks = await searchKnowledge(query, projectId, topN);
+      const { chunks, embeddingTokens: et } = await searchKnowledge(query, projectId, topN);
       result = { chunks };
+      embeddingTokens = et;
     } else {
-      return { error: `Unknown tool: ${name}` };
+      return { result: { error: `Unknown tool: ${name}` }, embeddingTokens: 0 };
     }
 
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
-    return result;
+    return { result, embeddingTokens };
   } catch (e) {
     logger.error("tool execution error", { name, duration_ms: Date.now() - t0, err: e });
-    return { error: String(e) };
+    return { result: { error: String(e) }, embeddingTokens: 0 };
   }
 }

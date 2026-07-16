@@ -14,7 +14,7 @@ describe("executeTool", () => {
   it("calls /api/calendar/slots for get_available_slots", async () => {
     mockFetch.mockResolvedValueOnce({ json: async () => ({ slots: ["2026-06-23T09:00:00Z"] }) });
 
-    const result = await executeTool("get_available_slots", { from_date: "2026-06-23" }, "proj-1", "admin-test");
+    const { result } = await executeTool("get_available_slots", { from_date: "2026-06-23" }, "proj-1", "admin-test");
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url] = mockFetch.mock.calls[0] as [string, unknown];
@@ -26,7 +26,7 @@ describe("executeTool", () => {
   it("calls /api/enquiries for create_enquiry", async () => {
     mockFetch.mockResolvedValueOnce({ json: async () => ({ id: "enq-1" }) });
 
-    const result = await executeTool(
+    const { result } = await executeTool(
       "create_enquiry",
       { title: "Quote request", customer_phone: "+420123456789" },
       "proj-1",
@@ -40,8 +40,14 @@ describe("executeTool", () => {
   });
 
   it("returns error object for unknown tool", async () => {
-    const result = await executeTool("unknown_tool", {}, "proj-1", "admin-test");
+    const { result } = await executeTool("unknown_tool", {}, "proj-1", "admin-test");
     expect((result as { error: string }).error).toMatch(/Unknown tool/);
+  });
+
+  it("returns embeddingTokens 0 for non-knowledge tools", async () => {
+    mockFetch.mockResolvedValueOnce({ json: async () => ({ slots: [] }) });
+    const { embeddingTokens } = await executeTool("get_available_slots", {}, "proj-1", "admin-test");
+    expect(embeddingTokens).toBe(0);
   });
 
   it("calls /api/calendar/windows for get_day_availability", async () => {
@@ -52,7 +58,7 @@ describe("executeTool", () => {
     };
     mockFetch.mockResolvedValueOnce({ json: async () => windowsResponse });
 
-    const result = await executeTool(
+    const { result } = await executeTool(
       "get_day_availability",
       { from_date: "2026-06-30", days: 1 },
       "proj-1",
