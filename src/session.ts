@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { CallLogger, generateCallSummary, SmsOptions } from "./call-logger";
+import { CallLogger, generateCallSummary, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import { loadAssistantSettings, AssistantSettings } from "./config";
 import { logger } from "./logger";
 import { buildPromptFromSettings, buildTools } from "./prompt";
@@ -22,6 +22,11 @@ export class CallSession {
   private calendarProjectId = "admin-test";
   private ended = false;
   private settings: AssistantSettings | null = null;
+  private usageAccum = {
+    realtimeAudioIn: 0, realtimeAudioOut: 0,
+    realtimeTextIn: 0,  realtimeTextOut: 0,
+    searchEmbedding: 0,
+  };
 
   constructor(
     projectId: string | null,
@@ -139,11 +144,8 @@ export class CallSession {
         }
       : undefined;
 
-    const { title, summary, ownerSms, callerSms, emailOwner } = await generateCallSummary(
-      apiKey,
-      this.logger.transcript,
-      smsOptions
-    );
+    const { title, summary, ownerSms, callerSms, emailOwner, summaryInputTokens, summaryOutputTokens } =
+      await generateCallSummary(apiKey, this.logger.transcript, smsOptions);
 
     const { ownerSent, callerSent } = await sendSmsNotifications({
       ownerSms,
@@ -152,7 +154,17 @@ export class CallSession {
       callerPhone: this.callerPhone,
     });
 
-    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSms, callerSms, emailOwner);
+    const tokenUsage: TokenUsage = {
+      realtimeAudioIn:  this.usageAccum.realtimeAudioIn,
+      realtimeAudioOut: this.usageAccum.realtimeAudioOut,
+      realtimeTextIn:   this.usageAccum.realtimeTextIn,
+      realtimeTextOut:  this.usageAccum.realtimeTextOut,
+      summaryIn:        summaryInputTokens,
+      summaryOut:       summaryOutputTokens,
+      searchEmbedding:  this.usageAccum.searchEmbedding,
+    };
+
+    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSms, callerSms, emailOwner, tokenUsage);
 
     // Send email notification if enabled
     if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {
@@ -182,6 +194,19 @@ export class CallSession {
       logger.error("OpenAI error event", { detail: JSON.stringify(msg) });
     } else if (type !== "response.output_audio.delta") {
       logger.debug("← openai event", { type });
+    }
+
+    if (type === "response.done") {
+      const response = msg["response"] as Record<string, unknown> | undefined;
+      const usage = response?.["usage"] as Record<string, unknown> | undefined;
+      if (usage) {
+        const inDet  = usage["input_token_details"]  as Record<string, number> | undefined;
+        const outDet = usage["output_token_details"] as Record<string, number> | undefined;
+        this.usageAccum.realtimeAudioIn  += inDet?.["audio_tokens"]  ?? 0;
+        this.usageAccum.realtimeAudioOut += outDet?.["audio_tokens"] ?? 0;
+        this.usageAccum.realtimeTextIn   += inDet?.["text_tokens"]   ?? 0;
+        this.usageAccum.realtimeTextOut  += outDet?.["text_tokens"]  ?? 0;
+      }
     }
 
     if (type === "session.updated" && this.settings?.greeting_enabled && this.settings?.greeting_message?.trim()) {
@@ -236,7 +261,8 @@ export class CallSession {
 
     const t0 = Date.now();
     const knowledgeTopN = this.settings?.knowledge_top_n ?? 5;
-    const result = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN);
+    const { result, embeddingTokens } = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN);
+    this.usageAccum.searchEmbedding += embeddingTokens;
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
 
     this.callbacks.sendJson({ type: "engine.tool_done", name });
