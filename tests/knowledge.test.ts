@@ -23,22 +23,34 @@ beforeEach(() => {
 });
 
 describe("searchKnowledge", () => {
-  it("returns mapped chunks with text, filename, and score", async () => {
-    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+  it("returns mapped chunks with text, filename, score, and embeddingTokens", async () => {
+    mockCreate.mockResolvedValue({
+      data: [{ embedding: FAKE_VECTOR }],
+      usage: { total_tokens: 42 },
+    });
     mockSearch.mockResolvedValue([
       { score: 0.95, payload: { text: "Hello world", filename: "doc.pdf", project_id: "proj-1" } },
       { score: 0.82, payload: { text: "Second chunk", filename: "doc.pdf", project_id: "proj-1" } },
     ]);
 
-    const results = await searchKnowledge("what are your hours?", "proj-1", 2);
+    const { chunks, embeddingTokens } = await searchKnowledge("what are your hours?", "proj-1", 2);
 
-    expect(results).toHaveLength(2);
-    expect(results[0]).toEqual({ text: "Hello world", filename: "doc.pdf", score: 0.95 });
-    expect(results[1]).toEqual({ text: "Second chunk", filename: "doc.pdf", score: 0.82 });
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toEqual({ text: "Hello world", filename: "doc.pdf", score: 0.95 });
+    expect(chunks[1]).toEqual({ text: "Second chunk", filename: "doc.pdf", score: 0.82 });
+    expect(embeddingTokens).toBe(42);
+  });
+
+  it("returns 0 embeddingTokens when usage is missing from response", async () => {
+    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+    mockSearch.mockResolvedValue([]);
+
+    const { embeddingTokens } = await searchKnowledge("query", "proj-1", 5);
+    expect(embeddingTokens).toBe(0);
   });
 
   it("passes topN as limit to qdrant search", async () => {
-    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }], usage: { total_tokens: 5 } });
     mockSearch.mockResolvedValue([]);
 
     await searchKnowledge("query", "proj-1", 7);
@@ -50,7 +62,7 @@ describe("searchKnowledge", () => {
   });
 
   it("filters by project_id", async () => {
-    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }], usage: { total_tokens: 5 } });
     mockSearch.mockResolvedValue([]);
 
     await searchKnowledge("query", "proj-abc", 3);
@@ -66,7 +78,7 @@ describe("searchKnowledge", () => {
   });
 
   it("uses text-embedding-3-small model", async () => {
-    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }], usage: { total_tokens: 5 } });
     mockSearch.mockResolvedValue([]);
 
     await searchKnowledge("test query", "proj-1", 5);
@@ -76,21 +88,21 @@ describe("searchKnowledge", () => {
     );
   });
 
-  it("returns empty array when qdrant returns no results", async () => {
-    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+  it("returns empty chunks when qdrant returns no results", async () => {
+    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }], usage: { total_tokens: 5 } });
     mockSearch.mockResolvedValue([]);
 
-    const results = await searchKnowledge("obscure query", "proj-1", 5);
-    expect(results).toEqual([]);
+    const { chunks } = await searchKnowledge("obscure query", "proj-1", 5);
+    expect(chunks).toEqual([]);
   });
 
   it("handles missing payload fields gracefully", async () => {
-    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }], usage: { total_tokens: 5 } });
     mockSearch.mockResolvedValue([
       { score: 0.7, payload: {} },
     ]);
 
-    const results = await searchKnowledge("query", "proj-1", 5);
-    expect(results[0]).toEqual({ text: "", filename: "", score: 0.7 });
+    const { chunks } = await searchKnowledge("query", "proj-1", 5);
+    expect(chunks[0]).toEqual({ text: "", filename: "", score: 0.7 });
   });
 });

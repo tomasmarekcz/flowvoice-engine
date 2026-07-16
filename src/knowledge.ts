@@ -20,16 +20,22 @@ export interface KnowledgeChunk {
   score: number;
 }
 
+export interface KnowledgeSearchResult {
+  chunks: KnowledgeChunk[];
+  embeddingTokens: number;
+}
+
 export async function searchKnowledge(
   query: string,
   projectId: string,
   topN: number
-): Promise<KnowledgeChunk[]> {
+): Promise<KnowledgeSearchResult> {
   const embeddingRes = await openai().embeddings.create({
     model: "text-embedding-3-small",
     input: query,
   });
   const vector = embeddingRes.data[0].embedding;
+  const embeddingTokens = (embeddingRes.usage as { total_tokens?: number } | undefined)?.total_tokens ?? 0;
 
   const results = await qdrant().search(COLLECTION, {
     vector,
@@ -40,9 +46,11 @@ export async function searchKnowledge(
     with_payload: true,
   });
 
-  return results.map((r) => ({
-    text: (r.payload?.text as string) ?? "",
-    filename: (r.payload?.filename as string) ?? "",
+  const chunks = results.map((r) => ({
+    text: (r.payload?.["text"] as string) ?? "",
+    filename: (r.payload?.["filename"] as string) ?? "",
     score: r.score,
   }));
+
+  return { chunks, embeddingTokens };
 }
