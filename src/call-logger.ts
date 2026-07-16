@@ -266,7 +266,7 @@ ${responseShape}`;
           { role: "user", content: lines.slice(0, 6000) },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 2000,
+        max_completion_tokens: 2000,
       }),
     });
     const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
