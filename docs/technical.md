@@ -53,12 +53,14 @@ writes), `prompt.ts` (consumes `AssistantSettings` to build the prompt).
 
 **Purpose:** `searchKnowledge()` — embeds a natural-language query using
 OpenAI `text-embedding-3-small`, then searches the Qdrant `documents`
-collection filtered by `project_id`, and returns the top-N chunks as
-`{ text, filename, score }` objects. Called during live calls by
+collection filtered by `project_id`, and returns the top-N chunks plus
+the number of embedding tokens consumed. Called during live calls by
 `tools.ts` when the `search_knowledge` tool fires.
 
 **Main exports:** `searchKnowledge(query, projectId, topN)` →
-`Promise<KnowledgeChunk[]>`, `KnowledgeChunk` (interface).
+`Promise<KnowledgeSearchResult>`, `KnowledgeChunk` (interface: `{ text,
+filename, score }`), `KnowledgeSearchResult` (interface: `{ chunks:
+KnowledgeChunk[]; embeddingTokens: number }`).
 
 **Depends on:** `@qdrant/js-client-rest` (`QDRANT_URL`,
 `QDRANT_API_KEY` env vars), `openai` (`OPENAI_API_KEY`).
@@ -77,6 +79,11 @@ and (if enabled) triggers the owner email notification. When
 `session.updated` event so the assistant speaks first at call start.
 Passes `settings.knowledge_top_n` (defaulting to 5) to `executeTool` so
 the `search_knowledge` handler knows how many Qdrant chunks to return.
+Accumulates per-call token usage in a private `usageAccum` field: listens
+to `response.done` events for `input_token_details` / `output_token_details`
+(audio and text tokens from the Realtime API) and adds `embeddingTokens`
+returned by each `executeTool` call; passes the assembled `TokenUsage`
+object to `finalizeCall()` at call end.
 
 **Main exports:** `CallSession` (class: `start()`, `handleClientAudio()`,
 `handleClientEvent()`, `end()`), `SessionCallbacks` (interface:
@@ -101,7 +108,10 @@ dashboard API. `search_knowledge` is handled locally via `knowledge.ts`
 (Qdrant + OpenAI embeddings — no HTTP hop to the dashboard). `end_call`
 is handled entirely inside `session.ts`, not here.
 
-**Main exports:** `executeTool(name, args, projectId, calendarProjectId, dbCallId?, knowledgeTopN?)`.
+**Main exports:** `executeTool(name, args, projectId, calendarProjectId, dbCallId?, knowledgeTopN?)` →
+`Promise<{ result: unknown; embeddingTokens: number }>`. All branches return
+`embeddingTokens: 0` except `search_knowledge`, which propagates the value
+from `searchKnowledge()`.
 
 **Depends on:** `logger.ts`, `knowledge.ts`; HTTP calls into the `flowvoice`
 dashboard's `/api/calendar/slots`, `/api/services`, `/api/resources`,
@@ -139,11 +149,17 @@ directly (via REST, not through the dashboard API) at call start
 (`createCall`), accumulates the transcript and tool-call log as OpenAI/
 client events arrive, and exposes `generateCallSummary()` to produce the
 post-call title/summary/SMS/email text via GPT once the call ends.
+`generateCallSummary()` now also returns `summaryInputTokens` and
+`summaryOutputTokens` from the GPT response's `usage` object. `finalizeCall()`
+accepts an optional `TokenUsage` parameter and patches all 7 token-count
+columns on the `calls` row (realtime audio in/out, realtime text in/out,
+summary in/out, search embedding).
 
 **Main exports:** `CallLogger` (class: `createCall()`,
-`handleOpenAIEvent()`, `handleClientEvent()`, `finalizeCall()`,
+`handleOpenAIEvent()`, `handleClientEvent()`, `finalizeCall(tokenUsage?)`,
 `callId`, `transcript`, `callDurationSeconds`), `generateCallSummary()`,
-`SmsOptions`, `TranscriptEntry`.
+`TokenUsage` (interface), `ZERO_TOKEN_USAGE` (constant), `SmsOptions`,
+`TranscriptEntry`.
 
 **Depends on:** `config.ts` (`getSupabaseUrl`, `getSupabaseHeaders`),
 `logger.ts`.
