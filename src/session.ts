@@ -78,7 +78,7 @@ export class CallSession {
           audio: {
             input: {
               format: { type: "audio/pcm", rate: 24000 },
-              transcription: { model: "whisper-1" },
+              transcription: { model: "gpt-4o-transcribe" },
               turn_detection: {
                 type: "server_vad",
                 threshold: 0.8,
