@@ -1,6 +1,14 @@
 import { logger } from "./logger";
 import { searchKnowledge } from "./knowledge";
 
+// Identifies this engine to the frontend's tenant-scoped API routes (which
+// otherwise require a logged-in Supabase Auth session) — the engine has no
+// user session of its own, just a project_id it already legitimately derived
+// from the live Twilio call.
+function internalHeaders(): Record<string, string> {
+  return { "X-Internal-Secret": process.env.ENGINE_INTERNAL_SECRET ?? "" };
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
@@ -31,12 +39,12 @@ export async function executeTool(
       result = await r.json();
     } else if (name === "get_services") {
       const params = new URLSearchParams({ project_id: projectId });
-      const r = await fetch(`${base}/api/services?${params}`);
+      const r = await fetch(`${base}/api/services?${params}`, { headers: internalHeaders() });
       result = await r.json();
     } else if (name === "get_resources") {
       const params = new URLSearchParams({ project_id: projectId });
       if (args["service_id"]) params.set("service_id", String(args["service_id"]));
-      const r = await fetch(`${base}/api/resources?${params}`);
+      const r = await fetch(`${base}/api/resources?${params}`, { headers: internalHeaders() });
       result = await r.json();
     } else if (name === "get_day_availability") {
       const fromDate = args["from_date"]
@@ -48,7 +56,7 @@ export async function executeTool(
         days: String(args["days"] ?? 7),
       });
       if (args["service_id"]) params.set("service_id", String(args["service_id"]));
-      const r = await fetch(`${base}/api/calendar/windows?${params}`);
+      const r = await fetch(`${base}/api/calendar/windows?${params}`, { headers: internalHeaders() });
       result = await r.json();
     } else if (name === "web_search") {
       const params = new URLSearchParams({
@@ -75,7 +83,7 @@ export async function executeTool(
 
       const r = await fetch(`${base}/api/calendar/events?project_id=${calendarProjectId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...internalHeaders() },
         body: JSON.stringify({
           title: args["title"] ?? "Appointment",
           start_time: startTime,
@@ -95,7 +103,7 @@ export async function executeTool(
     } else if (name === "create_enquiry") {
       const r = await fetch(`${base}/api/enquiries`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...internalHeaders() },
         body: JSON.stringify({
           project_id: projectId,
           title: args["title"] ?? "Enquiry",
