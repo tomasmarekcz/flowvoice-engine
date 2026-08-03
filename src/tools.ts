@@ -8,6 +8,7 @@ export async function executeTool(
   calendarProjectId: string,
   dbCallId?: string,
   knowledgeTopN?: number,
+  callerPhone?: string | null,
 ): Promise<{ result: unknown; embeddingTokens: number }> {
   const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
   const t0 = Date.now();
@@ -80,7 +81,7 @@ export async function executeTool(
           start_time: startTime,
           end_time: endTime,
           customer_name: args["customer_name"] ?? null,
-          customer_phone: args["customer_phone"] ?? null,
+          customer_phone: args["customer_phone"] || callerPhone || null,
           notes: args["notes"] ?? null,
           service_id: args["service_id"] ?? null,
           resource_id: args["resource_id"] ?? null,
@@ -99,7 +100,7 @@ export async function executeTool(
           project_id: projectId,
           title: args["title"] ?? "Enquiry",
           description: args["description"] ?? null,
-          customer_phone: args["customer_phone"] ?? "unknown",
+          customer_phone: args["customer_phone"] || callerPhone || "unknown",
           customer_name: args["customer_name"] ?? null,
           customer_email: args["customer_email"] ?? null,
           status: "new",

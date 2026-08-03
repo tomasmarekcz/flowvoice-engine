@@ -62,6 +62,10 @@ export class CallLogger {
     return Math.round((Date.now() - this.startMs) / 1000);
   }
 
+  get callStartMs(): number {
+    return this.startMs;
+  }
+
   private get enabled(): boolean {
     try { getSupabaseUrl(); getSupabaseHeaders(); return !!this.projectId; }
     catch { return false; }
@@ -236,10 +240,13 @@ const DEFAULT_CALLER_SMS_INSTRUCTIONS =
 
 export { DEFAULT_OWNER_SMS_INSTRUCTIONS, DEFAULT_CALLER_SMS_INSTRUCTIONS };
 
+const LANGUAGE_NAMES: Record<string, string> = { cs: "Czech", en: "English" };
+
 export async function generateCallSummary(
   apiKey: string,
   transcript: TranscriptEntry[],
-  smsOptions?: SmsOptions
+  smsOptions?: SmsOptions,
+  projectLanguage?: string | null
 ): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null; summaryInputTokens: number; summaryOutputTokens: number }> {
   if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null, summaryInputTokens: 0, summaryOutputTokens: 0 };
 
@@ -271,7 +278,11 @@ Based only on the conversation, generate:
 * title: A clear, specific title of up to 6 words that describes the caller's main reason for calling or the outcome of the call. Prefer concrete details such as the requested service, appointment type, problem, or customer intent. Avoid generic titles such as "Customer call", "General inquiry", or "Phone conversation".
 * summary: One concise sentence summarizing the most important information from the call. Include what the caller wanted, any relevant details they provided, and the agreed outcome or next step. Do not include unimportant small talk or repeat information.
 
-Use the language primarily spoken by the caller.${smsParts ? "\n\nAlso generate:" + smsParts : ""}
+${
+    projectLanguage && LANGUAGE_NAMES[projectLanguage]
+      ? `Write everything in ${LANGUAGE_NAMES[projectLanguage]} — the business's configured language.`
+      : "Use the language primarily spoken by the caller."
+  }${smsParts ? "\n\nAlso generate:" + smsParts : ""}
 
 Return valid JSON only, with no markdown or additional text:
 ${responseShape}`;

@@ -6,6 +6,27 @@ import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
 import { sendSmsNotifications } from "./sms";
 
+function formatOwnerSms(
+  rawSummary: string,
+  opts: { callerPhone: string | null; startMs: number; callId: string | null; lang: string | null }
+): string {
+  const isCs = opts.lang === "cs";
+  const header = isCs ? "🆕 Nová konverzace" : "🆕 New conversation";
+  const time = new Intl.DateTimeFormat(isCs ? "cs-CZ" : "en-US", {
+    timeZone: "Europe/Prague",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(opts.startMs);
+  const phoneLine = `📞 ${opts.callerPhone ?? (isCs ? "neznámé číslo" : "unknown number")} • ${time}`;
+
+  const lines = [header, phoneLine, rawSummary];
+  if (opts.callId) {
+    const base = process.env.PUBLIC_APP_URL ?? "https://leadoro.io";
+    lines.push(`🔗 ${base}/conversations/${opts.callId}`);
+  }
+  return lines.join("\n");
+}
+
 export interface SessionCallbacks {
   sendAudio: (pcm24Base64: string) => void;
   sendJson: (obj: unknown) => void;
@@ -53,7 +74,7 @@ export class CallSession {
     this.settings = settings;
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
 
-    const instructions = buildPromptFromSettings(settings);
+    const instructions = buildPromptFromSettings(settings, this.callerPhone);
     const tools = buildTools(settings);
     const voice = settings?.voice ?? "alloy";
 
@@ -145,10 +166,19 @@ export class CallSession {
       : undefined;
 
     const { title, summary, ownerSms, callerSms, emailOwner, summaryInputTokens, summaryOutputTokens } =
-      await generateCallSummary(apiKey, this.logger.transcript, smsOptions);
+      await generateCallSummary(apiKey, this.logger.transcript, smsOptions, this.settings?._project_language ?? null);
+
+    const ownerSmsFinal = ownerSms
+      ? formatOwnerSms(ownerSms, {
+          callerPhone: this.callerPhone,
+          startMs: this.logger.callStartMs,
+          callId: this.logger.callId,
+          lang: this.settings?._project_language ?? null,
+        })
+      : null;
 
     const { ownerSent, callerSent } = await sendSmsNotifications({
-      ownerSms,
+      ownerSms: ownerSmsFinal,
       ownerPhone: this.settings?.owner_phone ?? null,
       callerSms,
       callerPhone: this.callerPhone,
@@ -164,7 +194,7 @@ export class CallSession {
       searchEmbedding:  this.usageAccum.searchEmbedding,
     };
 
-    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSms, callerSms, emailOwner, tokenUsage);
+    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage);
 
     // Send email notification if enabled
     if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {
@@ -261,7 +291,7 @@ export class CallSession {
 
     const t0 = Date.now();
     const knowledgeTopN = this.settings?.knowledge_top_n ?? 5;
-    const { result, embeddingTokens } = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN);
+    const { result, embeddingTokens } = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN, this.callerPhone);
     this.usageAccum.searchEmbedding += embeddingTokens;
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
 
