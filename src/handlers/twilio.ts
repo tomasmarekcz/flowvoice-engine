@@ -124,6 +124,10 @@ export async function handleTwilioConnection(
           const typed = obj as Record<string, unknown>;
           if (typed?.["type"]) logger.debug("engine event to Twilio", { type: typed["type"] });
         },
+        sendMark: (name) => {
+          if (!capturedStreamSid || ws.readyState !== WS.OPEN) return;
+          ws.send(JSON.stringify({ event: "mark", streamSid: capturedStreamSid, mark: { name } }));
+        },
         endCall: () => {
           logger.info("end_call: closing Twilio WS");
           if (ws.readyState === WS.OPEN) ws.close();
@@ -143,6 +147,12 @@ export async function handleTwilioConnection(
       if (!session) return;
       const payload = (msg["media"] as Record<string, string>)["payload"];
       session.handleClientAudio(twilioAudioToOpenAI(payload));
+      return;
+    }
+
+    if (event === "mark") {
+      const markName = (msg["mark"] as Record<string, string> | undefined)?.["name"];
+      if (session && markName) session.handleTwilioMark(markName);
       return;
     }
 

@@ -21,6 +21,9 @@ export async function handleBrowserConnection(
     sendJson: (obj) => {
       if (ws.readyState === WS.OPEN) ws.send(JSON.stringify(obj));
     },
+    // No Twilio media stream here to echo a mark back — this is a raw
+    // browser test client, so end_call just falls back to the safety timer.
+    sendMark: () => {},
     endCall: () => {
       if (ws.readyState === WS.OPEN) ws.close();
     },

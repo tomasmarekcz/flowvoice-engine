@@ -30,8 +30,13 @@ function formatOwnerSms(
 export interface SessionCallbacks {
   sendAudio: (pcm24Base64: string) => void;
   sendJson: (obj: unknown) => void;
+  sendMark: (name: string) => void;
   endCall: () => void;
 }
+
+// If Twilio never echoes back the mark confirming the goodbye audio finished
+// playing (e.g. a dropped Twilio WS event), don't leave the call hanging open.
+const END_CALL_MARK_FALLBACK_MS = 5000;
 
 export class CallSession {
   private projectId: string | null;
@@ -43,6 +48,8 @@ export class CallSession {
   private calendarProjectId = "admin-test";
   private ended = false;
   private settings: AssistantSettings | null = null;
+  private pendingEndCallMark: string | null = null;
+  private endCallFallbackTimer: NodeJS.Timeout | null = null;
   private usageAccum = {
     realtimeAudioIn: 0, realtimeAudioOut: 0,
     realtimeTextIn: 0,  realtimeTextOut: 0,
@@ -146,6 +153,20 @@ export class CallSession {
     if (this.openaiWs?.readyState !== WebSocket.OPEN) return;
     this.openaiWs.send(JSON.stringify(msg));
     this.logger.handleClientEvent(msg);
+  }
+
+  // Twilio echoes a "mark" event back once it has actually finished playing
+  // all audio queued before that mark — used to confirm the end_call goodbye
+  // was fully heard before we close the connection.
+  handleTwilioMark(name: string): void {
+    if (name !== this.pendingEndCallMark) return;
+    this.pendingEndCallMark = null;
+    if (this.endCallFallbackTimer) {
+      clearTimeout(this.endCallFallbackTimer);
+      this.endCallFallbackTimer = null;
+    }
+    logger.info("end_call goodbye audio confirmed played, hanging up", { markName: name });
+    this.callbacks.endCall();
   }
 
   async end(): Promise<void> {
@@ -283,9 +304,20 @@ export class CallSession {
         // No response.create — AI should not speak after hanging up
       }
       this.callbacks.sendJson({ type: "engine.tool_done", name });
-      // End session (generates summary) then close the call connection
+      // Generate the call summary now, but don't hang up yet — the goodbye
+      // audio for this turn may still be streaming out to Twilio. Send a
+      // Twilio "mark" right after it; Twilio only echoes it back once that
+      // audio has actually finished playing to the caller, which is when we
+      // actually close the connection (see handleTwilioMark below).
       this.end().catch((e) => logger.error("end_call session.end error", { err: e }));
-      setTimeout(() => this.callbacks.endCall(), 300);
+      const markName = `end-call-${Date.now()}`;
+      this.pendingEndCallMark = markName;
+      this.callbacks.sendMark(markName);
+      this.endCallFallbackTimer = setTimeout(() => {
+        logger.warn("end_call mark not acknowledged in time, hanging up anyway", { markName });
+        this.pendingEndCallMark = null;
+        this.callbacks.endCall();
+      }, END_CALL_MARK_FALLBACK_MS);
       return;
     }
 
