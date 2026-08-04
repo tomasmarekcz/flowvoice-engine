@@ -36,7 +36,7 @@ export interface SessionCallbacks {
 
 // If Twilio never echoes back the mark confirming the goodbye audio finished
 // playing (e.g. a dropped Twilio WS event), don't leave the call hanging open.
-const END_CALL_MARK_FALLBACK_MS = 5000;
+const END_CALL_MARK_FALLBACK_MS = 15000;
 
 export class CallSession {
   private projectId: string | null;
