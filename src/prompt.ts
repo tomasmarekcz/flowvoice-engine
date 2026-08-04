@@ -132,11 +132,13 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
       custom: settings?.enquiries_trigger_custom ?? "a custom condition is met",
     };
     const triggerNote = triggers.map((t) => triggerLabels[t] ?? t).join("; ");
-    const reqFields = settings?.enquiries_required_fields ?? { name: true, email: false };
+    const enquiryReqFields = settings?.enquiries_required_fields ?? { email: false };
+    const enquiryRequired = ["title", "customer_phone", "customer_name"];
+    if (enquiryReqFields["email"]) enquiryRequired.push("customer_email");
     tools.push({
       type: "function",
       name: "create_enquiry",
-      description: `Flag this call for follow-up from the business owner. Use when: ${triggerNote}. ${reqFields["name"] ? "Always ask for the customer's name first. " : ""}After calling, confirm you've logged their request.`,
+      description: `Flag this call for follow-up from the business owner. Use when: ${triggerNote}. Always ask for the customer's name first.${enquiryReqFields["email"] ? " Also ask for their email address — it's required for this business." : ""} After calling, confirm you've logged their request.`,
       parameters: {
         type: "object",
         properties: {
@@ -146,12 +148,15 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
           customer_name: { type: "string", description: "Customer's full name" },
           customer_email: { type: "string", description: "Customer's email address" },
         },
-        required: ["title", "customer_phone"],
+        required: enquiryRequired,
       },
     });
   }
 
   if (caps["calendar"]) {
+    const bookingReqFields = settings?.booking_required_fields ?? { email: false };
+    const bookingRequired = ["start_time", "end_time", "title", "customer_name", "customer_phone"];
+    if (bookingReqFields["email"]) bookingRequired.push("customer_email");
     tools.push(
       {
         type: "function",
@@ -204,7 +209,7 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
       {
         type: "function",
         name: "create_calendar_event",
-        description: "Book an appointment after the customer confirms a specific slot. Created as pending_review. Pick the first available resource from the get_day_availability response and inform the customer which resource you booked.",
+        description: `Book an appointment after the customer confirms a specific slot. Created as pending_review. Pick the first available resource from the get_day_availability response and inform the customer which resource you booked. Always ask for the customer's name and phone number before booking.${bookingReqFields["email"] ? " Also ask for their email address — it's required for this business (e.g. to send a call link for online meetings)." : ""}`,
         parameters: {
           type: "object",
           properties: {
@@ -213,11 +218,12 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
             title: { type: "string", description: "Short appointment title" },
             customer_name: { type: "string", description: "Customer name" },
             customer_phone: { type: "string", description: "Customer phone" },
+            customer_email: { type: "string", description: "Customer email address" },
             notes: { type: "string", description: "Optional notes" },
             service_id: { type: "string", description: "The service ID being booked." },
             resource_id: { type: "string", description: "The resource ID chosen from get_day_availability response." },
           },
-          required: ["start_time", "end_time", "title"],
+          required: bookingRequired,
         },
       }
     );

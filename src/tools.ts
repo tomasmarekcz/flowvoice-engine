@@ -90,6 +90,7 @@ export async function executeTool(
           end_time: endTime,
           customer_name: args["customer_name"] ?? null,
           customer_phone: args["customer_phone"] || callerPhone || null,
+          customer_email: args["customer_email"] ?? null,
           notes: args["notes"] ?? null,
           service_id: args["service_id"] ?? null,
           resource_id: args["resource_id"] ?? null,

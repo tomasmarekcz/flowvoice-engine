@@ -11,6 +11,7 @@ export interface AssistantSettings {
   enquiries_trigger: string[] | null;
   enquiries_trigger_custom: string | null;
   enquiries_required_fields: Record<string, boolean> | null;
+  booking_required_fields: Record<string, boolean> | null;
   calendar_id: string | null;
   _calendar_project_id: string;
   sms_owner_enabled: boolean;

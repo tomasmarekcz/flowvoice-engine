@@ -13,6 +13,7 @@ const BASE: AssistantSettings = {
   enquiries_trigger: null,
   enquiries_trigger_custom: null,
   enquiries_required_fields: null,
+  booking_required_fields: null,
   calendar_id: null,
   _calendar_project_id: "test-cal",
   sms_owner_enabled: false,
