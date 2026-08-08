@@ -107,6 +107,7 @@ export async function executeTool(
         headers: { "Content-Type": "application/json", ...internalHeaders() },
         body: JSON.stringify({
           project_id: projectId,
+          call_id: dbCallId ?? null,
           title: args["title"] ?? "Enquiry",
           description: args["description"] ?? null,
           customer_phone: args["customer_phone"] || callerPhone || "unknown",
