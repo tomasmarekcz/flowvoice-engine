@@ -207,6 +207,7 @@ export class CallLogger {
         body: JSON.stringify({
           ended_at: new Date(endMs).toISOString(),
           duration_seconds,
+          billable_minutes: duration_seconds > 0 ? Math.ceil(duration_seconds / 60) : 0,
           transcript: this.transcript,
           tool_calls: this.toolCalls,
           ai_title: aiTitle ?? null,
