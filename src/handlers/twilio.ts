@@ -5,8 +5,9 @@ import { CallSession } from "../session";
 import { logger } from "../logger";
 import { twilioAudioToOpenAI, openAIAudioToTwilio } from "../audio";
 import { getSupabaseUrl, getSupabaseHeaders } from "../config";
+import { checkCallEligibility } from "../billing";
 
-export function handleTwilioVoiceWebhook(req: Request, res: Response): void {
+export async function handleTwilioVoiceWebhook(req: Request, res: Response): Promise<void> {
   if (process.env.TWILIO_SKIP_VALIDATION !== "true") {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const twilio = require("twilio") as {
@@ -31,6 +32,18 @@ export function handleTwilioVoiceWebhook(req: Request, res: Response): void {
   const callSid = body["CallSid"] ?? "";
 
   logger.info("twilio voice webhook", { project_id: projectId, caller: callerPhone, call_sid: callSid });
+
+  const eligibility = await checkCallEligibility(projectId);
+  if (!eligibility.allowed) {
+    logger.info("call rejected by billing eligibility", { project_id: projectId, reason: eligibility.reason });
+    const rejectionTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>We're sorry, this number is temporarily unavailable. Please try again later.</Say>
+  <Hangup/>
+</Response>`;
+    res.type("text/xml").send(rejectionTwiml);
+    return;
+  }
 
   const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "localhost:8080";
   const wsProtocol = process.env.ENGINE_HOST ? "wss" : "ws";
