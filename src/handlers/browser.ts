@@ -3,6 +3,7 @@ import { IncomingMessage } from "http";
 import { URL } from "url";
 import { CallSession } from "../session";
 import { logger } from "../logger";
+import { checkCallEligibility } from "../billing";
 
 export async function handleBrowserConnection(
   ws: WS,
@@ -11,6 +12,16 @@ export async function handleBrowserConnection(
   const params = new URL(request.url ?? "", "http://localhost").searchParams;
   const projectId = params.get("project_id");
   logger.info("browser client connected", { project_id: projectId ?? "none" });
+
+  if (projectId) {
+    const eligibility = await checkCallEligibility(projectId);
+    if (!eligibility.allowed) {
+      logger.info("browser call rejected by billing eligibility", { project_id: projectId, reason: eligibility.reason });
+      ws.send(JSON.stringify({ type: "error", message: `Call not allowed: ${eligibility.reason}` }));
+      ws.close();
+      return;
+    }
+  }
 
   const session = new CallSession(projectId, null, null, {
     sendAudio: (pcm24Base64) => {
