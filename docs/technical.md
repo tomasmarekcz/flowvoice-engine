@@ -36,7 +36,9 @@ name/industry/description/website/language, owner phone/email),
 (`_service_names`, active service names for the prompt). Also includes
 `greeting_enabled` / `greeting_message` for the optional opening greeting
 feature and `knowledge_top_n` (number | null) for how many Qdrant chunks
-are returned per `search_knowledge` call (defaults to 5 if null). Fields
+are returned per `search_knowledge` call (defaults to 5 if null), and
+`voice_engine` (`"standard"` | `"live"`, optional — a missing value means
+Standard) which selects the voice engine in `session-factory.ts`. Fields
 prefixed `_` are joined/derived, not columns on `assistant_settings` itself.
 
 **Main exports:** `getSupabaseUrl()`, `getSupabaseHeaders()`,
@@ -85,17 +87,120 @@ to `response.done` events for `input_token_details` / `output_token_details`
 returned by each `executeTool` call; passes the assembled `TokenUsage`
 object to `finalizeCall()` at call end.
 
+This is the **Standard** voice engine (`gpt-realtime-2`, PCM 24 kHz). It
+implements `VoiceSession` (`audioFormat` is `"pcm24"`). The optional fifth
+constructor argument `preloadedSettings` lets `session-factory.ts` pass in
+settings it already loaded; when it is not `undefined` (`null` counts),
+`start()` does not load them again.
+
 **Main exports:** `CallSession` (class: `start()`, `handleClientAudio()`,
-`handleClientEvent()`, `end()`), `SessionCallbacks` (interface:
-`sendAudio`, `sendJson`, `endCall`).
+`handleClientEvent()`, `handleTwilioMark()`, `end()`), `formatOwnerSms`
+(shared with `live-session.ts`), `SessionCallbacks` (re-exported type from
+`session-types.ts`).
 
 **Depends on:** `call-logger.ts` (`CallLogger`, `generateCallSummary`,
 `SmsOptions`), `config.ts` (`loadAssistantSettings`, `AssistantSettings`),
 `prompt.ts` (`buildPromptFromSettings`, `buildTools`), `tools.ts`
-(`executeTool`), `sms.ts` (`sendSmsNotifications`), `logger.ts`.
+(`executeTool`), `sms.ts` (`sendSmsNotifications`), `session-types.ts`,
+`logger.ts`.
 
-**Depended on by:** `handlers/twilio.ts` and `handlers/browser.ts` (both
-construct a `CallSession` per connection).
+**Depended on by:** `session-factory.ts` (Twilio calls) and
+`handlers/browser.ts` (the browser test call always uses this engine),
+`live-session.ts` (`formatOwnerSms`).
+
+## session-types.ts
+
+**Purpose:** Shared types for the two voice engines. `AudioFormat`
+(`"pcm24"` for Standard, `"mulaw8"` for Live), `SessionCallbacks`
+(`sendAudio(audio, format?)` where an omitted `format` means PCM 24 kHz,
+`sendJson`, `sendMark`, `endCall`) and `VoiceSession` (the surface the
+Twilio handler uses: `audioFormat`, `start()`, `handleClientAudio()`,
+`handleTwilioMark()`, `end()`).
+
+**Main exports:** `AudioFormat`, `SessionCallbacks`, `VoiceSession`.
+
+**Depended on by:** `session.ts`, `live-session.ts`, `session-factory.ts`,
+`handlers/twilio.ts`.
+
+## session-factory.ts
+
+**Purpose:** `startCallSession()` — loads the assistant settings once and
+returns an already-started session: `LiveCallSession` when
+`settings.voice_engine === "live"`, otherwise `CallSession` (given the
+loaded settings). If the Live session fails to start (socket error, close
+before `session.started`, or start timeout) it is aborted and the call is
+answered by `CallSession` instead, so a caller never hears silence.
+
+**Main exports:** `startCallSession(projectId, callerPhone, twilioCallSid, callbacks)`.
+
+**Depends on:** `config.ts`, `session.ts`, `live-session.ts`,
+`session-types.ts`, `logger.ts`.
+
+**Depended on by:** `handlers/twilio.ts`.
+
+## live-protocol.ts
+
+**Purpose:** Pure helpers for the GPT-Live (`gpt-live-1`) wire protocol, so
+the message shapes are tested in one place: `buildLiveSessionStart()` (the
+`session.start` message — 8 kHz mu-law audio, a short conversation prompt for
+the voice model, and Responses delegation carrying the business prompt without
+the greeting rule, the tools from `buildTools()`, `parallel_tool_calls: false`
+and, when `end_call` is enabled, a rule telling the backend to call it in the
+same turn as its closing sentence), `buildLiveGreetingInstruction()`,
+`extractFunctionCall()` (parses `response.event` → `response.output_item.done`),
+`buildToolResultMessages()` (`response.item.create` plus optional
+`response.create`), `pickLiveVoice()` and `TranscriptAccumulator` (merges
+transcript deltas into per-speaker utterances). Model names come from
+`LIVE_MODEL` (default `gpt-live-1`) and `LIVE_BACKEND_MODEL` (default
+`gpt-5.6-terra`).
+
+**Main exports:** `LIVE_ENDPOINT`, `LIVE_VOICES`, `LIVE_CONVERSATION_PROMPT`,
+`liveModel`, `liveBackendModel`, `pickLiveVoice`, `buildLiveGreetingInstruction`,
+`buildLiveSessionStart`, `extractFunctionCall`, `buildToolResultMessages`,
+`TranscriptAccumulator`.
+
+**Depends on:** `prompt.ts`, `config.ts` (type), `call-logger.ts` (type).
+
+**Depended on by:** `live-session.ts`.
+
+## live-session.ts
+
+**Purpose:** `LiveCallSession` — the **Natural (Beta)** voice engine
+(`gpt-live-1`, G.711 mu-law 8 kHz, so Twilio audio passes through without
+transcoding). Connects to `wss://api.openai.com/v1/live/sessions`; `start()`
+resolves after `session.started` (rejects on socket error/close or after 4 s)
+and only then creates the `calls` row and sends the greeting instruction. The
+voice model only speaks; reasoning and tool calls are delegated to an OpenAI
+backend model. Tool calls arrive as `response.event` items and are run with
+the existing `executeTool`, then answered with `response.item.create` and
+`response.create`. `end_call` returns its result without continuing, then
+hangs up through a Twilio mark once no output audio has arrived for 1.2 s.
+Transcript deltas are accumulated and, together with the tool calls, handed to
+the shared `CallLogger`; `end()`/`end_call` finalize exactly once (summary, SMS,
+email, `calls` row). `abort()` closes the socket without finalizing (used for
+the fallback). Usage arrives as `session.usage.updated` (seconds) and is only
+logged; `billable_minutes` comes from the call duration.
+
+**Main exports:** `LiveCallSession` (`start()`, `handleClientAudio()`,
+`handleTwilioMark()`, `abort()`, `end()`), `LiveSessionDeps` (injectable
+`connect` and `executeTool` for tests and the harness).
+
+**Depends on:** `live-protocol.ts`, `call-logger.ts`, `session.ts`
+(`formatOwnerSms`), `session-types.ts`, `tools.ts`, `sms.ts`, `config.ts`
+(type), `logger.ts`, `ws`.
+
+**Depended on by:** `session-factory.ts`, `scripts/live-harness.ts`.
+
+## scripts/live-harness.ts
+
+**Purpose:** Local test driver, not part of the running service. Streams a
+recorded mu-law WAV into a `LiveCallSession` with fake callbacks and stubbed
+tools (or `--real-tools`), prints events (`--raw` shows every server event),
+measures the reply delay and saves the reply audio as a WAV. Run with
+`npx ts-node src/scripts/live-harness.ts caller.wav`; needs `OPENAI_API_KEY`
+and costs a few cents per run.
+
+**Depends on:** `live-session.ts`, `config.ts`.
 
 ## tools.ts
 
@@ -129,7 +234,10 @@ call, assembled from up to five sections: (1) universal base prompt
 active service names, today's date in `Europe/Prague`), (3) tools
 preamble, (4) optional client-editable business instructions, (5) optional
 `===CALL START===` greeting rule — only appended when `greeting_enabled`
-is true and `greeting_message` is non-empty. Also builds the tools array
+is true and `greeting_message` is non-empty, and skipped when
+`buildPromptFromSettings` is called with `{ includeGreeting: false }` (the
+Live engine's backend model does not speak, so it must not get that rule).
+Also builds the tools array
 via `buildTools()`, which now includes `search_knowledge` when the
 `business_knowledge` capability is on, with a description that mentions
 the configured `knowledge_top_n` value.
@@ -223,15 +331,16 @@ a Media Stream WebSocket back to this engine with `project_id`/
 callback (`handleRecordingStatusCallback` — patches the `calls` row with
 the final recording URL once Twilio finishes processing it), and the
 Media Stream WebSocket handler itself (`handleTwilioConnection` — parses
-`start`/`media`/`stop` frames, creates a `CallSession` on `start`, feeds
-audio through `audio.ts`'s codec functions, and ends the session on
-`stop`/close).
+`start`/`media`/`stop` frames, starts a session through
+`session-factory.ts` on `start`, feeds audio through `audio.ts`'s codec
+functions only when the session expects PCM 24 kHz (Live takes mu-law as is),
+and ends the session on `stop`/close).
 
 **Main exports:** `handleTwilioVoiceWebhook`, `handleRecordingStatusCallback`,
 `handleTwilioConnection`.
 
-**Depends on:** `session.ts` (`CallSession`), `logger.ts`, `audio.ts`
-(`twilioAudioToOpenAI`, `openAIAudioToTwilio`), `config.ts`
+**Depends on:** `session-factory.ts` (`startCallSession`), `session-types.ts`,
+`logger.ts`, `audio.ts` (`twilioAudioToOpenAI`, `openAIAudioToTwilio`), `config.ts`
 (`getSupabaseUrl`, `getSupabaseHeaders`), the `twilio` npm package (request
 signature validation only).
 
