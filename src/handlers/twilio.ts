@@ -1,7 +1,8 @@
 import { WebSocket as WS } from "ws";
 import { IncomingMessage } from "http";
 import type { Request, Response } from "express";
-import { CallSession } from "../session";
+import { startCallSession } from "../session-factory";
+import type { AudioFormat, VoiceSession } from "../session-types";
 import { logger } from "../logger";
 import { twilioAudioToOpenAI, openAIAudioToTwilio } from "../audio";
 import { getSupabaseUrl, getSupabaseHeaders } from "../config";
@@ -102,7 +103,7 @@ export async function handleTwilioConnection(
   _request: IncomingMessage
 ): Promise<void> {
   let streamSid: string | null = null;
-  let session: CallSession | null = null;
+  let session: VoiceSession | null = null;
 
   logger.info("Twilio Media Stream connected");
 
@@ -124,20 +125,20 @@ export async function handleTwilioConnection(
 
       const capturedStreamSid = streamSid;
 
-      session = new CallSession(projectId, callerPhone, callSid, {
-        sendAudio: (pcm24Base64) => {
+      const callbacks = {
+        sendAudio: (audio: string, format: AudioFormat = "pcm24") => {
           if (!capturedStreamSid || ws.readyState !== WS.OPEN) return;
           ws.send(JSON.stringify({
             event: "media",
             streamSid: capturedStreamSid,
-            media: { payload: openAIAudioToTwilio(pcm24Base64) },
+            media: { payload: format === "mulaw8" ? audio : openAIAudioToTwilio(audio) },
           }));
         },
-        sendJson: (obj) => {
+        sendJson: (obj: unknown) => {
           const typed = obj as Record<string, unknown>;
           if (typed?.["type"]) logger.debug("engine event to Twilio", { type: typed["type"] });
         },
-        sendMark: (name) => {
+        sendMark: (name: string) => {
           if (!capturedStreamSid || ws.readyState !== WS.OPEN) return;
           ws.send(JSON.stringify({ event: "mark", streamSid: capturedStreamSid, mark: { name } }));
         },
@@ -145,10 +146,15 @@ export async function handleTwilioConnection(
           logger.info("end_call: closing Twilio WS");
           if (ws.readyState === WS.OPEN) ws.close();
         },
-      });
+      };
 
       try {
-        await session.start();
+        const started = await startCallSession(projectId, callerPhone, callSid, callbacks);
+        session = started;
+        if (ws.readyState !== WS.OPEN) {
+          // The caller hung up while the session was starting.
+          await started.end().catch((e) => logger.error("session.end error", { err: e }));
+        }
       } catch (e) {
         logger.error("session.start error", { err: e });
         ws.close();
@@ -159,7 +165,7 @@ export async function handleTwilioConnection(
     if (event === "media") {
       if (!session) return;
       const payload = (msg["media"] as Record<string, string>)["payload"];
-      session.handleClientAudio(twilioAudioToOpenAI(payload));
+      session.handleClientAudio(session.audioFormat === "mulaw8" ? payload : twilioAudioToOpenAI(payload));
       return;
     }
 
