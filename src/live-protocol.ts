@@ -17,7 +17,12 @@ export function liveBackendModel(): string {
 }
 
 // Short on purpose: the live model only speaks. The business prompt goes to the backend.
-export const LIVE_CONVERSATION_PROMPT = `You are the voice of a professional phone assistant for a business. Speak naturally, warmly and briefly, always in the caller's language, and ask one question at a time. Whenever the caller needs information, an action such as booking, a lookup, or logging a request, or anything you are not certain about, ask the backend for help instead of guessing. Never say an action was completed until the backend confirms it.`;
+export const LIVE_CONVERSATION_PROMPT = `You are the voice of a professional phone assistant for a business. Speak naturally, warmly and briefly, always in the caller's language, and ask one question at a time. Whenever the caller needs information, an action such as booking, a lookup, or logging a request, or anything you are not certain about, ask the backend for help instead of guessing. Never say an action was completed until the backend confirms it. The call only ends when the backend ends it. So whenever the conversation is finished, for example the caller says goodbye or thanks you and needs nothing else, say a brief goodbye and then always ask the backend to end the call.`;
+
+// A separate voice model talks to the caller and often says goodbye on its own, so the
+// backend must be told explicitly to hang up, otherwise the call stays open.
+const END_CALL_BACKEND_RULE = `===ENDING THE CALL===
+A separate voice model speaks to the caller and hands work to you. When the caller says goodbye or has nothing more to ask, and everything they needed is handled, write a short closing sentence and then, in that same turn, call the end_call tool. Never finish such a turn with only text: the call stays open until you call end_call, and the caller will not say anything more.`;
 
 export function pickLiveVoice(voice: string | null | undefined): string {
   return voice && LIVE_VOICES.includes(voice) ? voice : DEFAULT_LIVE_VOICE;
@@ -35,6 +40,10 @@ export function buildLiveSessionStart(
   callerPhone: string | null
 ): { message: Record<string, unknown>; tools: OpenAITool[] } {
   const tools = buildTools(settings);
+  const businessPrompt = buildPromptFromSettings(settings, callerPhone, { includeGreeting: false });
+  const backendInstructions = tools.some((t) => t.name === "end_call")
+    ? `${businessPrompt}\n\n${END_CALL_BACKEND_RULE}`
+    : businessPrompt;
   const message = {
     type: "session.start",
     event_id: "start_1",
@@ -49,7 +58,7 @@ export function buildLiveSessionStart(
         type: "responses",
         responses: {
           model: liveBackendModel(),
-          instructions: buildPromptFromSettings(settings, callerPhone, { includeGreeting: false }),
+          instructions: backendInstructions,
           tools,
           tool_choice: tools.length > 0 ? "auto" : "none",
           // One tool call at a time, so a single response.create after each result is always correct.

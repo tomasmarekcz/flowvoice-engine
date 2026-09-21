@@ -89,6 +89,18 @@ describe("buildLiveSessionStart", () => {
     expect(backend).not.toContain("===CALL START===");
   });
 
+  it("tells the backend to call end_call when the conversation is finished", () => {
+    const { message } = buildLiveSessionStart(settings(), null);
+    const backend = (message["session"] as StartSession).delegation.responses.instructions;
+    expect(backend).toContain("end_call");
+  });
+
+  it("does not mention end_call to the backend when that capability is off", () => {
+    const { message } = buildLiveSessionStart(settings({ capabilities: { enquiries: true } }), null);
+    const backend = (message["session"] as StartSession).delegation.responses.instructions;
+    expect(backend).not.toContain("end_call");
+  });
+
   it("sets tool_choice to none when there are no tools", () => {
     const { message } = buildLiveSessionStart(settings({ capabilities: {} }), null);
     expect((message["session"] as StartSession).delegation.responses.tool_choice).toBe("none");
