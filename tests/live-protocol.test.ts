@@ -40,12 +40,14 @@ type StartSession = {
 };
 
 describe("pickLiveVoice", () => {
-  it("keeps a supported live voice", () => {
+  it("keeps any supported voice", () => {
     expect(pickLiveVoice("marin")).toBe("marin");
+    expect(pickLiveVoice("alloy")).toBe("alloy");
+    expect(pickLiveVoice("verse")).toBe("verse");
   });
 
-  it("falls back for Standard-only or missing voices", () => {
-    expect(pickLiveVoice("alloy")).toBe("marin");
+  it("falls back for unknown or missing voices", () => {
+    expect(pickLiveVoice("not-a-voice")).toBe("marin");
     expect(pickLiveVoice(null)).toBe("marin");
     expect(pickLiveVoice(undefined)).toBe("marin");
   });
@@ -65,7 +67,7 @@ describe("buildLiveSessionStart", () => {
     expect(session.model).toBe("gpt-live-1");
     expect(session.instructions).toBe(LIVE_CONVERSATION_PROMPT);
     expect(session.audio.format).toEqual({ type: "audio/pcmu", rate: 8000 });
-    expect(session.audio.output.voice).toBe("marin");
+    expect(session.audio.output.voice).toBe("alloy");
     expect(session.delegation.type).toBe("responses");
     expect(session.delegation.responses.model).toBe("gpt-5.6-terra");
     expect(session.delegation.responses.tool_choice).toBe("auto");

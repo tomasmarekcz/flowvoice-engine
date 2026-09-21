@@ -4,8 +4,10 @@ import { buildPromptFromSettings, buildTools, type OpenAITool } from "./prompt";
 
 export const LIVE_ENDPOINT = "wss://api.openai.com/v1/live/sessions";
 
-// Voices verified for gpt-live-1. Extend after checking them with the harness.
-export const LIVE_VOICES = ["marin"];
+// Voices verified against the real gpt-live-1 API (an unknown voice name is rejected).
+export const LIVE_VOICES = [
+  "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse",
+];
 export const DEFAULT_LIVE_VOICE = "marin";
 
 export function liveModel(): string {
