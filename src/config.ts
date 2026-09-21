@@ -4,6 +4,7 @@ export interface AssistantSettings {
   project_id: string;
   system_prompt: string | null;
   voice: string | null;
+  voice_engine?: "standard" | "live" | null;
   is_active: boolean;
   capabilities: Record<string, boolean> | null;
   appointment_duration: number | null;

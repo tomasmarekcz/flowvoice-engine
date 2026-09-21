@@ -5,8 +5,9 @@ import { logger } from "./logger";
 import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
 import { sendSmsNotifications } from "./sms";
+import type { SessionCallbacks, VoiceSession } from "./session-types";
 
-function formatOwnerSms(
+export function formatOwnerSms(
   rawSummary: string,
   opts: { callerPhone: string | null; startMs: number; callId: string | null; lang: string | null }
 ): string {
@@ -27,18 +28,14 @@ function formatOwnerSms(
   return lines.join("\n");
 }
 
-export interface SessionCallbacks {
-  sendAudio: (pcm24Base64: string) => void;
-  sendJson: (obj: unknown) => void;
-  sendMark: (name: string) => void;
-  endCall: () => void;
-}
+export type { SessionCallbacks } from "./session-types";
 
 // If Twilio never echoes back the mark confirming the goodbye audio finished
 // playing (e.g. a dropped Twilio WS event), don't leave the call hanging open.
 const END_CALL_MARK_FALLBACK_MS = 15000;
 
-export class CallSession {
+export class CallSession implements VoiceSession {
+  readonly audioFormat = "pcm24" as const;
   private projectId: string | null;
   private callerPhone: string | null;
   private twilioCallSid: string | null;
@@ -60,7 +57,8 @@ export class CallSession {
     projectId: string | null,
     callerPhone: string | null,
     twilioCallSid: string | null,
-    callbacks: SessionCallbacks
+    callbacks: SessionCallbacks,
+    private preloadedSettings?: AssistantSettings | null
   ) {
     this.projectId = projectId;
     this.callerPhone = callerPhone;
@@ -74,7 +72,7 @@ export class CallSession {
     if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
     const [settings] = await Promise.all([
-      loadAssistantSettings(this.projectId),
+      this.preloadedSettings !== undefined ? this.preloadedSettings : loadAssistantSettings(this.projectId),
       this.logger.createCall(this.callerPhone),
     ]);
 
