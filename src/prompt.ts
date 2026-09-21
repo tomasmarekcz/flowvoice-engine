@@ -85,7 +85,11 @@ function buildGreetingRule(settings: AssistantSettings | null): string | null {
 
 // ─── Public API ────────────────────────────────────────────────────────────────
 
-export function buildPromptFromSettings(settings: AssistantSettings | null, callerPhone?: string | null): string {
+export function buildPromptFromSettings(
+  settings: AssistantSettings | null,
+  callerPhone?: string | null,
+  opts: { includeGreeting?: boolean } = {}
+): string {
   const sections: string[] = [
     BASE_PROMPT,
     buildBusinessContext(settings, callerPhone),
@@ -93,8 +97,10 @@ export function buildPromptFromSettings(settings: AssistantSettings | null, call
   ];
   const instructions = buildBusinessInstructions(settings);
   if (instructions) sections.push(instructions);
-  const greeting = buildGreetingRule(settings);
-  if (greeting) sections.push(greeting);
+  if (opts.includeGreeting !== false) {
+    const greeting = buildGreetingRule(settings);
+    if (greeting) sections.push(greeting);
+  }
   return sections.join("\n\n");
 }
 
