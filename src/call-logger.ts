@@ -247,9 +247,19 @@ export async function generateCallSummary(
   apiKey: string,
   transcript: TranscriptEntry[],
   smsOptions?: SmsOptions,
-  projectLanguage?: string | null
-): Promise<{ title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null; summaryInputTokens: number; summaryOutputTokens: number }> {
-  if (!apiKey || transcript.length === 0) return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null, summaryInputTokens: 0, summaryOutputTokens: 0 };
+  projectLanguage?: string | null,
+  enquiryCheckEnabled?: boolean
+): Promise<{
+  title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null;
+  summaryInputTokens: number; summaryOutputTokens: number;
+  shouldCreateEnquiry: boolean; enquiryTitle: string | null; enquiryDescription: string | null;
+}> {
+  const empty = {
+    title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null,
+    summaryInputTokens: 0, summaryOutputTokens: 0,
+    shouldCreateEnquiry: false, enquiryTitle: null, enquiryDescription: null,
+  };
+  if (!apiKey || transcript.length === 0) return empty;
 
   const needOwnerSms = !!smsOptions?.smsOwnerEnabled;
   const needCallerSms = !!smsOptions?.smsCallerEnabled;
@@ -270,7 +280,20 @@ export async function generateCallSummary(
       : "",
   ].join("");
 
-  const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}${needOwnerEmail ? ',"owner_email":"…"' : ""}}`;
+  const enquiryPart = enquiryCheckEnabled
+    ? `\n\nAlso decide whether this call needs a business owner enquiry created for follow-up. Only recommend creating one in serious cases — most calls should NOT create one. Create one only if at least one of these is true:
+- The customer was clearly dissatisfied or frustrated during the call.
+- The customer explicitly asked to speak to a human, or asked for a callback from a person.
+- The customer's request was not resolved — the assistant could not help, could not find an answer, or the call ended without a clear outcome.
+
+If none of these apply, do not create an enquiry.
+
+* create_enquiry: true or false
+* enquiry_title (only if create_enquiry is true): a short title (up to 6 words) describing what the customer needed and why it needs follow-up
+* enquiry_description (only if create_enquiry is true): 1-2 sentences explaining what happened and why a human should follow up`
+    : "";
+
+  const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}${needOwnerEmail ? ',"owner_email":"…"' : ""}${enquiryCheckEnabled ? ',"create_enquiry":false,"enquiry_title":"…","enquiry_description":"…"' : ""}}`;
 
   const systemPrompt = `You are processing a completed business phone call.
 
@@ -283,7 +306,7 @@ ${
     projectLanguage && LANGUAGE_NAMES[projectLanguage]
       ? `Write everything in ${LANGUAGE_NAMES[projectLanguage]} — the business's configured language.`
       : "Use the language primarily spoken by the caller."
-  }${smsParts ? "\n\nAlso generate:" + smsParts : ""}
+  }${smsParts ? "\n\nAlso generate:" + smsParts : ""}${enquiryPart}
 
 Return valid JSON only, with no markdown or additional text:
 ${responseShape}`;
@@ -312,6 +335,7 @@ ${responseShape}`;
     };
     const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as {
       title?: string; summary?: string; owner_sms?: string; caller_sms?: string; owner_email?: string;
+      create_enquiry?: boolean; enquiry_title?: string; enquiry_description?: string;
     };
     return {
       title: parsed.title ?? null,
@@ -321,9 +345,67 @@ ${responseShape}`;
       emailOwner: parsed.owner_email ?? null,
       summaryInputTokens: data.usage?.prompt_tokens ?? 0,
       summaryOutputTokens: data.usage?.completion_tokens ?? 0,
+      shouldCreateEnquiry: enquiryCheckEnabled ? !!parsed.create_enquiry : false,
+      enquiryTitle: parsed.enquiry_title ?? null,
+      enquiryDescription: parsed.enquiry_description ?? null,
     };
   } catch (e) {
     logger.error("generateCallSummary error", { err: e });
-    return { title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null, summaryInputTokens: 0, summaryOutputTokens: 0 };
+    return empty;
+  }
+}
+
+// Safety-net enquiry creation from the post-call summary step, for serious
+// cases the live create_enquiry tool call may have missed. Skips creating a
+// duplicate if the live tool already created one for this call.
+export async function maybeCreatePostCallEnquiry(opts: {
+  shouldCreate: boolean;
+  callId: string | null;
+  projectId: string | null;
+  callerPhone: string | null;
+  enquiryTitle: string | null;
+  enquiryDescription: string | null;
+}): Promise<void> {
+  const { shouldCreate, callId, projectId, callerPhone, enquiryTitle, enquiryDescription } = opts;
+  if (!shouldCreate || !callId || !projectId) return;
+
+  try {
+    const url = getSupabaseUrl();
+    const headers = getSupabaseHeaders();
+
+    const existingRes = await fetch(
+      `${url}/rest/v1/enquiries?call_id=eq.${callId}&select=id&limit=1`,
+      { headers }
+    );
+    const existing = (await existingRes.json()) as Array<{ id: string }>;
+    if (Array.isArray(existing) && existing.length > 0) {
+      logger.info("post-call enquiry skipped, already exists", { call_id: callId });
+      return;
+    }
+
+    const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
+    const res = await fetch(`${base}/api/enquiries`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": process.env.ENGINE_INTERNAL_SECRET ?? "",
+      },
+      body: JSON.stringify({
+        project_id: projectId,
+        call_id: callId,
+        title: enquiryTitle ?? "Follow-up needed",
+        description: enquiryDescription ?? null,
+        customer_phone: callerPhone || "unknown",
+        enquiry_type: "support",
+        status: "new",
+      }),
+    });
+    if (!res.ok) {
+      logger.error("post-call enquiry create failed", { call_id: callId, status: res.status });
+      return;
+    }
+    logger.info("post-call enquiry created", { call_id: callId });
+  } catch (e) {
+    logger.error("maybeCreatePostCallEnquiry error", { err: e });
   }
 }

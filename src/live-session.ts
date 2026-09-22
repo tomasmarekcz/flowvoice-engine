@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { CallLogger, generateCallSummary, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
+import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import type { AssistantSettings } from "./config";
 import { logger } from "./logger";
 import {
@@ -288,8 +288,22 @@ export class LiveCallSession implements VoiceSession {
         }
       : undefined;
 
-    const { title, summary, ownerSms, callerSms, emailOwner, summaryInputTokens, summaryOutputTokens } =
-      await generateCallSummary(apiKey, this.logger.transcript, smsOptions, this.settings?._project_language ?? null);
+    const {
+      title, summary, ownerSms, callerSms, emailOwner, summaryInputTokens, summaryOutputTokens,
+      shouldCreateEnquiry, enquiryTitle, enquiryDescription,
+    } = await generateCallSummary(
+      apiKey, this.logger.transcript, smsOptions, this.settings?._project_language ?? null,
+      !!this.settings?.capabilities?.["enquiries"]
+    );
+
+    await maybeCreatePostCallEnquiry({
+      shouldCreate: shouldCreateEnquiry,
+      callId: this.logger.callId,
+      projectId: this.projectId,
+      callerPhone: this.callerPhone,
+      enquiryTitle,
+      enquiryDescription,
+    });
 
     const ownerSmsFinal = ownerSms
       ? formatOwnerSms(ownerSms, {
