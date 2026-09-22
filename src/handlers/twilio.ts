@@ -34,6 +34,14 @@ function buildAiConnectTwiml(opts: {
 </Response>`;
 }
 
+function buildDeclineTwiml(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>We're sorry, this number is temporarily unavailable. Please try again later.</Say>
+  <Hangup/>
+</Response>`;
+}
+
 function buildDialToOwnerTwiml(opts: {
   engineHost: string; httpProtocol: string; ownerPhone: string;
   projectId: string; callerPhone: string; callSid: string; withAiFallback: boolean;
@@ -82,12 +90,7 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
   const eligibility = await checkCallEligibility(projectId);
   if (!eligibility.allowed) {
     logger.info("call rejected by billing eligibility", { project_id: projectId, reason: eligibility.reason });
-    const rejectionTwiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say>We're sorry, this number is temporarily unavailable. Please try again later.</Say>
-  <Hangup/>
-</Response>`;
-    res.type("text/xml").send(rejectionTwiml);
+    res.type("text/xml").send(buildDeclineTwiml());
     return;
   }
 
@@ -97,13 +100,19 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
 
   const settings = await loadAssistantSettings(projectId);
   const routing = decideCallRouting({
+    isActive: settings?.is_active ?? true,
     answerMode: settings?.answer_mode,
     workingHours: settings?.working_hours,
     timezone: settings?._calendar_timezone,
     hasOwnerPhone: !!settings?.owner_phone,
   });
 
-  logger.info("call routing decision", { project_id: projectId, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });
+  logger.info("call routing decision", { project_id: projectId, is_active: settings?.is_active ?? true, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });
+
+  if (routing.kind === "declined") {
+    res.type("text/xml").send(buildDeclineTwiml());
+    return;
+  }
 
   if (routing.kind === "dial") {
     const twiml = buildDialToOwnerTwiml({

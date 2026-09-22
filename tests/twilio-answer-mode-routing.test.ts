@@ -35,7 +35,7 @@ const ALWAYS_OPEN = {
 const ALWAYS_CLOSED = { mon: null, tue: null, wed: null, thu: null, fri: null, sat: null, sun: null };
 
 function mockSupabaseAndEligibility(opts: {
-  answerMode: string | null; ownerPhone: string | null; workingHours: unknown;
+  answerMode: string | null; ownerPhone: string | null; workingHours: unknown; isActive?: boolean;
 }) {
   mockFetch.mockImplementation((input: unknown) => {
     const url = typeof input === "string" ? input : String((input as { url?: string })?.url ?? input ?? "");
@@ -45,7 +45,8 @@ function mockSupabaseAndEligibility(opts: {
     if (url.includes("/rest/v1/assistant_settings")) {
       return Promise.resolve({
         json: async () => [{
-          project_id: "11111111-1111-1111-1111-111111111111", answer_mode: opts.answerMode, working_hours: opts.workingHours,
+          project_id: "11111111-1111-1111-1111-111111111111", is_active: opts.isActive ?? true,
+          answer_mode: opts.answerMode, working_hours: opts.workingHours,
           calendar_id: null, capabilities: {},
         }],
       });
@@ -126,6 +127,30 @@ describe("answer_mode call routing (end-to-end webhook)", () => {
 
     expect(res.text).toContain("<Stream");
     expect(res.text).not.toContain("<Dial");
+  });
+
+  it("is_active = false declines the call outright instead of connecting to AI", async () => {
+    mockSupabaseAndEligibility({ answerMode: "always", ownerPhone: "+420700000000", workingHours: ALWAYS_OPEN, isActive: false });
+
+    const res = await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA123");
+
+    expect(res.text).toContain("<Hangup");
+    expect(res.text).not.toContain("<Stream");
+    expect(res.text).not.toContain("<Dial");
+  });
+
+  it("is_active = false takes priority over an answer_mode that would otherwise dial the owner", async () => {
+    mockSupabaseAndEligibility({ answerMode: "outside_hours", ownerPhone: "+420700000000", workingHours: ALWAYS_OPEN, isActive: false });
+
+    const res = await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA123");
+
+    expect(res.text).toContain("<Hangup");
+    expect(res.text).not.toContain("<Dial");
+    expect(res.text).not.toContain("<Stream");
   });
 });
 
