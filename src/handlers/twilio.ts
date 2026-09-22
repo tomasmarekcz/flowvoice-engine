@@ -5,8 +5,53 @@ import { startCallSession } from "../session-factory";
 import type { AudioFormat, VoiceSession } from "../session-types";
 import { logger } from "../logger";
 import { twilioAudioToOpenAI, openAIAudioToTwilio } from "../audio";
-import { getSupabaseUrl, getSupabaseHeaders } from "../config";
+import { getSupabaseUrl, getSupabaseHeaders, loadAssistantSettings } from "../config";
 import { checkCallEligibility } from "../billing";
+import { decideCallRouting } from "../call-routing";
+
+const DIAL_TO_OWNER_TIMEOUT_SECONDS = 20;
+
+function buildAiConnectTwiml(opts: {
+  engineHost: string; wsProtocol: string; httpProtocol: string;
+  projectId: string; callerPhone: string; callSid: string;
+  includeRecording: boolean;
+}): string {
+  const recording = opts.includeRecording
+    ? `<Start>
+    <Recording recordingStatusCallback="${opts.httpProtocol}://${opts.engineHost}/twilio/recording-status" recordingStatusCallbackEvent="completed" />
+  </Start>
+  `
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  ${recording}<Connect>
+    <Stream url="${opts.wsProtocol}://${opts.engineHost}/ws/twilio">
+      <Parameter name="project_id" value="${opts.projectId}" />
+      <Parameter name="caller_phone" value="${opts.callerPhone}" />
+      <Parameter name="call_sid" value="${opts.callSid}" />
+    </Stream>
+  </Connect>
+</Response>`;
+}
+
+function buildDialToOwnerTwiml(opts: {
+  engineHost: string; httpProtocol: string; ownerPhone: string;
+  projectId: string; callerPhone: string; callSid: string; withAiFallback: boolean;
+}): string {
+  const recordingCallback = `${opts.httpProtocol}://${opts.engineHost}/twilio/recording-status`;
+  const dialAction = `${opts.httpProtocol}://${opts.engineHost}/twilio/voice/dial-status`
+    + `?project_id=${encodeURIComponent(opts.projectId)}`
+    + `&caller_phone=${encodeURIComponent(opts.callerPhone)}`
+    + `&call_sid=${encodeURIComponent(opts.callSid)}`
+    + `&with_ai_fallback=${opts.withAiFallback ? "true" : "false"}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Start>
+    <Recording recordingStatusCallback="${recordingCallback}" recordingStatusCallbackEvent="completed" />
+  </Start>
+  <Dial timeout="${DIAL_TO_OWNER_TIMEOUT_SECONDS}" action="${dialAction}">${opts.ownerPhone}</Dial>
+</Response>`;
+}
 
 export async function handleTwilioVoiceWebhook(req: Request, res: Response): Promise<void> {
   if (process.env.TWILIO_SKIP_VALIDATION !== "true") {
@@ -49,22 +94,60 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
   const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "localhost:8080";
   const wsProtocol = process.env.ENGINE_HOST ? "wss" : "ws";
   const httpProtocol = process.env.ENGINE_HOST ? "https" : "http";
-  const recordingCallback = `${httpProtocol}://${engineHost}/twilio/recording-status`;
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Start>
-    <Recording recordingStatusCallback="${recordingCallback}" recordingStatusCallbackEvent="completed" />
-  </Start>
-  <Connect>
-    <Stream url="${wsProtocol}://${engineHost}/ws/twilio">
-      <Parameter name="project_id" value="${projectId}" />
-      <Parameter name="caller_phone" value="${callerPhone}" />
-      <Parameter name="call_sid" value="${callSid}" />
-    </Stream>
-  </Connect>
-</Response>`;
+  const settings = await loadAssistantSettings(projectId);
+  const routing = decideCallRouting({
+    answerMode: settings?.answer_mode,
+    workingHours: settings?.working_hours,
+    timezone: settings?._calendar_timezone,
+    hasOwnerPhone: !!settings?.owner_phone,
+  });
 
+  logger.info("call routing decision", { project_id: projectId, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });
+
+  if (routing.kind === "dial") {
+    const twiml = buildDialToOwnerTwiml({
+      engineHost, httpProtocol,
+      ownerPhone: settings!.owner_phone as string,
+      projectId, callerPhone, callSid,
+      withAiFallback: routing.withAiFallback,
+    });
+    res.type("text/xml").send(twiml);
+    return;
+  }
+
+  const twiml = buildAiConnectTwiml({
+    engineHost, wsProtocol, httpProtocol, projectId, callerPhone, callSid, includeRecording: true,
+  });
+  res.type("text/xml").send(twiml);
+}
+
+// Twilio calls this after a <Dial> to the owner ends (answered, no-answer,
+// busy, failed, or canceled) — see buildDialToOwnerTwiml's action URL.
+export async function handleDialStatusCallback(req: Request, res: Response): Promise<void> {
+  const dialCallStatus = (req.body as Record<string, string>)["DialCallStatus"] ?? "";
+  const withAiFallback = req.query["with_ai_fallback"] === "true";
+  const projectId = (req.query["project_id"] as string) ?? "";
+  const callerPhone = (req.query["caller_phone"] as string) ?? "";
+  const callSid = (req.query["call_sid"] as string) ?? "";
+
+  logger.info("dial status callback", { project_id: projectId, dial_call_status: dialCallStatus, with_ai_fallback: withAiFallback });
+
+  if (dialCallStatus === "completed" || !withAiFallback) {
+    // The owner answered, or this mode never wanted an AI fallback on no-answer.
+    res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+    return;
+  }
+
+  const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "localhost:8080";
+  const wsProtocol = process.env.ENGINE_HOST ? "wss" : "ws";
+  const httpProtocol = process.env.ENGINE_HOST ? "https" : "http";
+
+  // Recording was already started in the initial webhook response, before
+  // the <Dial> — don't start a second one here.
+  const twiml = buildAiConnectTwiml({
+    engineHost, wsProtocol, httpProtocol, projectId, callerPhone, callSid, includeRecording: false,
+  });
   res.type("text/xml").send(twiml);
 }
 
