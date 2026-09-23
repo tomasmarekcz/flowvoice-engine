@@ -136,7 +136,8 @@ describe("answer_mode call routing (end-to-end webhook)", () => {
       .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
       .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA123");
 
-    expect(res.text).toContain("<Hangup");
+    expect(res.text).toContain("<Reject");
+    expect(res.text).not.toContain("<Say");
     expect(res.text).not.toContain("<Stream");
     expect(res.text).not.toContain("<Dial");
   });
@@ -148,7 +149,7 @@ describe("answer_mode call routing (end-to-end webhook)", () => {
       .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
       .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA123");
 
-    expect(res.text).toContain("<Hangup");
+    expect(res.text).toContain("<Reject");
     expect(res.text).not.toContain("<Dial");
     expect(res.text).not.toContain("<Stream");
   });

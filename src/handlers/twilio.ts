@@ -110,7 +110,8 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
   logger.info("call routing decision", { project_id: projectId, is_active: settings?.is_active ?? true, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });
 
   if (routing.kind === "declined") {
-    res.type("text/xml").send(buildDeclineTwiml());
+    // <Reject> never answers the call, so nothing is said and no call is connected.
+    res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>`);
     return;
   }
 
