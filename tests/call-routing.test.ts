@@ -80,4 +80,13 @@ describe("decideCallRouting", () => {
       hasOwnerPhone: false, now: WITHIN_HOURS_NOW,
     })).toEqual({ kind: "ai" });
   });
+
+  it("goes to AI in dial modes when no working hours are stored", () => {
+    for (const answerMode of ["outside_hours", "missed_and_outside"] as const) {
+      expect(decideCallRouting({
+        isActive: true, answerMode, workingHours: null, timezone: "Europe/Prague",
+        hasOwnerPhone: true, now: WITHIN_HOURS_NOW,
+      })).toEqual({ kind: "ai" });
+    }
+  });
 });

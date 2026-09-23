@@ -33,6 +33,10 @@ export function decideCallRouting(opts: {
     return { kind: "ai" };
   }
 
+  // No stored working hours means "not configured" - we can't tell if the owner is
+  // available, so the AI answers rather than ringing the owner with no fallback.
+  if (!opts.workingHours) return { kind: "ai" };
+
   const withinHours = isWithinWorkingHours(opts.workingHours, opts.timezone, opts.now);
   if (mode === "outside_hours") {
     return withinHours ? { kind: "dial", withAiFallback: false } : { kind: "ai" };
