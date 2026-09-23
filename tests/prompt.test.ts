@@ -75,6 +75,17 @@ describe("buildTools", () => {
     expect(names).toContain("create_calendar_event");
   });
 
+  it("tells the assistant to book with a listed resource, let the customer choose between several, and recover from a rejected slot", () => {
+    const tools = buildTools(BASE);
+    const availability = tools.find((t) => t.name === "get_day_availability")!;
+    const booking = tools.find((t) => t.name === "create_calendar_event")!;
+    expect(availability.description).toContain("resources (name and description)");
+    expect(availability.description).toContain("pass the service_id");
+    expect(booking.description).toContain("resource_id of a resource listed as free");
+    expect(booking.description).toContain("let them choose");
+    expect(booking.description).toContain("no longer available");
+  });
+
   it("returns no calendar tools when calendar capability is false", () => {
     const tools = buildTools({ ...BASE, capabilities: { calendar: false } });
     const names = tools.map((t) => t.name);
