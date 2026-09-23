@@ -69,7 +69,7 @@ describe("buildLiveSessionStart", () => {
     expect(session.audio.format).toEqual({ type: "audio/pcmu", rate: 8000 });
     expect(session.audio.output.voice).toBe("alloy");
     expect(session.delegation.type).toBe("responses");
-    expect(session.delegation.responses.model).toBe("gpt-5.6-terra");
+    expect(session.delegation.responses.model).toBe("gpt-5.6-luna");
     expect(session.delegation.responses.tool_choice).toBe("auto");
     expect(session.delegation.responses.parallel_tool_calls).toBe(false);
   });

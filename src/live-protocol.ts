@@ -15,7 +15,7 @@ export function liveModel(): string {
 }
 
 export function liveBackendModel(): string {
-  return process.env.LIVE_BACKEND_MODEL ?? "gpt-5.6-terra";
+  return process.env.LIVE_BACKEND_MODEL ?? "gpt-5.6-luna";
 }
 
 // Short on purpose: the live model only speaks. The business prompt goes to the backend.

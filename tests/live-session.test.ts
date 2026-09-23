@@ -125,6 +125,20 @@ describe("LiveCallSession start", () => {
     expect(greeting["content"]).toContain("Hello from Acme");
     expect(greeting["delegation_id"]).toBeNull();
   });
+
+  it("does not wait for the database write before greeting the caller", async () => {
+    const { CallLogger } = await import("../src/call-logger");
+    const createCall = vi.spyOn(CallLogger.prototype, "createCall").mockReturnValue(new Promise(() => {}));
+    const { session, socket } = makeSession(
+      baseSettings({ greeting_enabled: true, greeting_message: "Hello from Acme" })
+    );
+    void session.start();
+    socket.emit("open");
+    socket.serverSays({ type: "session.started" });
+    await vi.waitFor(() => expect(socket.sentOfType("session.instructions.append")).toHaveLength(1));
+    expect(createCall).toHaveBeenCalled();
+    createCall.mockRestore();
+  });
 });
 
 describe("LiveCallSession audio", () => {

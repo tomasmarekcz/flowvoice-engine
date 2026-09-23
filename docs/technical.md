@@ -152,7 +152,7 @@ same turn as its closing sentence), `buildLiveGreetingInstruction()`,
 `response.create`), `pickLiveVoice()` and `TranscriptAccumulator` (merges
 transcript deltas into per-speaker utterances). Model names come from
 `LIVE_MODEL` (default `gpt-live-1`) and `LIVE_BACKEND_MODEL` (default
-`gpt-5.6-terra`).
+`gpt-5.6-luna`).
 
 **Main exports:** `LIVE_ENDPOINT`, `LIVE_VOICES`, `LIVE_CONVERSATION_PROMPT`,
 `liveModel`, `liveBackendModel`, `pickLiveVoice`, `buildLiveGreetingInstruction`,

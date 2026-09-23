@@ -40,6 +40,8 @@ export class LiveCallSession implements VoiceSession {
   private readonly runTool: typeof defaultExecuteTool;
   private readonly calendarProjectId: string;
   private started = false;
+  private readyAt = 0;
+  private firstAudioLogged = false;
   private ended = false;
   private hangupRequested = false;
   private hangupMarkSent = false;
@@ -73,6 +75,7 @@ export class LiveCallSession implements VoiceSession {
     const { message } = buildLiveSessionStart(this.settings, this.callerPhone);
     this.logger.openaiPayload = message["session"];
 
+    const connectStartedAt = Date.now();
     logger.info("connecting to OpenAI Live", { project_id: this.projectId ?? "none" });
     const ws = this.connect(LIVE_ENDPOINT, apiKey);
     this.ws = ws;
@@ -109,10 +112,13 @@ export class LiveCallSession implements VoiceSession {
       clearTimeout(timeout);
     }
 
-    // Only create the calls row once Live is confirmed, so a fallback to Standard
-    // never leaves a duplicate row behind.
-    await this.logger.createCall(this.callerPhone);
+    logger.info("OpenAI Live session ready", { ms_since_connect: Date.now() - connectStartedAt });
+    // Greet first: the model only speaks while input audio is flowing, and every
+    // millisecond spent on the database write below is silence for the caller.
     this.sendGreeting();
+    // Only create the calls row once Live is confirmed, so a fallback to Standard
+    // never leaves a duplicate row behind. createCall never throws.
+    await this.logger.createCall(this.callerPhone);
   }
 
   handleClientAudio(mulawBase64: string): void {
@@ -168,6 +174,10 @@ export class LiveCallSession implements VoiceSession {
     const type = msg["type"] as string;
 
     if (type === "session.output_audio.delta") {
+      if (!this.firstAudioLogged) {
+        this.firstAudioLogged = true;
+        logger.info("first assistant audio sent to caller", { ms_since_session_ready: Date.now() - this.readyAt });
+      }
       this.callbacks.sendAudio(msg["delta"] as string, "mulaw8");
       if (this.hangupRequested) this.armHangupTimer();
       return;
@@ -178,6 +188,7 @@ export class LiveCallSession implements VoiceSession {
 
     if (type === "session.started") {
       this.started = true;
+      this.readyAt = Date.now();
       this.markStarted?.();
       return;
     }
