@@ -129,6 +129,27 @@ describe("answer_mode call routing (end-to-end webhook)", () => {
     expect(res.text).not.toContain("<Dial");
   });
 
+  it("dials the owner with whitespace stripped from the stored number", async () => {
+    mockSupabaseAndEligibility({ answerMode: "outside_hours", ownerPhone: "+420 700 000 000", workingHours: ALWAYS_OPEN });
+
+    const res = await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA123");
+
+    expect(res.text).toContain(">+420700000000</Dial>");
+  });
+
+  it("connects to the AI instead of dialing when the caller is the owner", async () => {
+    mockSupabaseAndEligibility({ answerMode: "outside_hours", ownerPhone: "+420 777 123 456", workingHours: ALWAYS_OPEN });
+
+    const res = await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:%2B420777123456@sip.zadarma.com&CallSid=CA123");
+
+    expect(res.text).toContain("<Stream");
+    expect(res.text).not.toContain("<Dial");
+  });
+
   it("is_active = false declines the call outright instead of connecting to AI", async () => {
     mockSupabaseAndEligibility({ answerMode: "always", ownerPhone: "+420700000000", workingHours: ALWAYS_OPEN, isActive: false });
 

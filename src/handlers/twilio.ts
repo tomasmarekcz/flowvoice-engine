@@ -34,6 +34,10 @@ function buildAiConnectTwiml(opts: {
 </Response>`;
 }
 
+function normalizePhone(phone: string | null | undefined): string {
+  return (phone ?? "").replace(/[\s()-]/g, "");
+}
+
 function buildDeclineTwiml(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -104,7 +108,8 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
     answerMode: settings?.answer_mode,
     workingHours: settings?.working_hours,
     timezone: settings?._calendar_timezone,
-    hasOwnerPhone: !!settings?.owner_phone,
+    // Dialing the owner when the owner is the one calling would just ring back to themselves (busy).
+    hasOwnerPhone: !!normalizePhone(settings?.owner_phone) && normalizePhone(settings?.owner_phone) !== normalizePhone(callerPhone),
   });
 
   logger.info("call routing decision", { project_id: projectId, is_active: settings?.is_active ?? true, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });
@@ -118,7 +123,7 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
   if (routing.kind === "dial") {
     const twiml = buildDialToOwnerTwiml({
       engineHost, httpProtocol,
-      ownerPhone: settings!.owner_phone as string,
+      ownerPhone: normalizePhone(settings!.owner_phone),
       projectId, callerPhone, callSid,
       withAiFallback: routing.withAiFallback,
     });
