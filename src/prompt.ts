@@ -192,7 +192,7 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
       {
         type: "function",
         name: "get_day_availability",
-        description: `Get available time windows from the business calendar for one or more days. Returns blocks of free time per day with which resources are available. Call get_services first to get a service_id. Calendar project: ${calendarProjectId}. Always ask the customer which day (and rough time preference) before calling.`,
+        description: `Get available time windows from the business calendar for one or more days. Returns blocks of free time per day; each block lists the resources (name and description) that are free then. Always call get_services first and pass the service_id, so only resources that perform that service are considered. Calendar project: ${calendarProjectId}. Always ask the customer which day (and rough time preference) before calling.`,
         parameters: {
           type: "object",
           properties: {
@@ -215,7 +215,7 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
       {
         type: "function",
         name: "create_calendar_event",
-        description: `Book an appointment after the customer confirms a specific slot. Created as pending_review. Pick the first available resource from the get_day_availability response and inform the customer which resource you booked. Always ask for the customer's name and phone number before booking.${bookingReqFields["email"] ? " Also ask for their email address — it's required for this business (e.g. to send a call link for online meetings)." : ""}`,
+        description: `Book an appointment after the customer confirms a specific slot. Created as pending_review. Always pass the resource_id of a resource listed as free for that exact block in the get_day_availability response. If more than one resource is free for the time the customer wants, tell them the names and let them choose; if they have no preference, take the first one. Tell the customer which resource you booked. If the booking is rejected because the time is no longer available, call get_day_availability again and offer another time - never claim the booking succeeded. Always ask for the customer's name and phone number before booking.${bookingReqFields["email"] ? " Also ask for their email address — it's required for this business (e.g. to send a call link for online meetings)." : ""}`,
         parameters: {
           type: "object",
           properties: {
