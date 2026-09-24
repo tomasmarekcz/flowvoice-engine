@@ -97,6 +97,16 @@ describe("buildLiveSessionStart", () => {
     expect(backend).toContain("end_call");
   });
 
+  it("makes the caller's answer, not the model's guess, the trigger for end_call", () => {
+    const { message } = buildLiveSessionStart(settings(), null);
+    const session = message["session"] as StartSession;
+    const backend = session.delegation.responses.instructions;
+    expect(backend).toContain("last word");
+    expect(backend).toContain("write no goodbye text yourself");
+    expect(session.instructions).toContain("Never say goodbye first");
+    expect(session.instructions).toContain("recap");
+  });
+
   it("does not mention end_call to the backend when that capability is off", () => {
     const { message } = buildLiveSessionStart(settings({ capabilities: { enquiries: true } }), null);
     const backend = (message["session"] as StartSession).delegation.responses.instructions;

@@ -20,6 +20,12 @@ const START_TIMEOUT_MS = 4000;
 // before asking Twilio to confirm playback, then hang up on the echoed mark.
 const END_CALL_IDLE_MS = 1200;
 const END_CALL_MARK_FALLBACK_MS = 15000;
+// Streaming audio that never goes quiet must not keep the line open: after end_call,
+// ask Twilio to confirm playback at the latest this long after the request.
+const END_CALL_MAX_WAIT_MS = 6000;
+// The caller's own goodbye can be transcribed a moment after end_call arrives, so only
+// speech later than this counts as the caller wanting to continue.
+const END_CALL_RESUME_GRACE_MS = 1500;
 
 export interface LiveSessionDeps {
   connect?: (url: string, apiKey: string) => WebSocket;
@@ -47,6 +53,8 @@ export class LiveCallSession implements VoiceSession {
   private hangupMarkSent = false;
   private pendingEndCallMark: string | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
+  private maxWaitTimer: NodeJS.Timeout | null = null;
+  private hangupRequestedAt = 0;
   private fallbackTimer: NodeJS.Timeout | null = null;
   private finalizePromise: Promise<void> | null = null;
   private embeddingTokens = 0;
@@ -193,7 +201,9 @@ export class LiveCallSession implements VoiceSession {
       return;
     }
     if (type === "session.input_transcript.delta") {
-      this.transcript.addDelta("user", String(msg["delta"] ?? ""));
+      const delta = String(msg["delta"] ?? "");
+      this.transcript.addDelta("user", delta);
+      if (delta.trim()) this.resumeIfCallerSpeaksAfterHangupRequest();
       return;
     }
     if (type === "session.output_transcript.delta") {
@@ -226,8 +236,11 @@ export class LiveCallSession implements VoiceSession {
       logger.info("end_call requested", { reason: String(args["reason"] ?? "conversation complete") });
       this.sendToolResult(callId, { status: "ok" }, false);
       this.hangupRequested = true;
-      this.finalizeOnce().catch((e) => logger.error("end_call finalize error", { err: e }));
+      this.hangupRequestedAt = Date.now();
+      // The summary and SMS run when the line actually closes (session.end), so a caller
+      // who keeps talking does not get a call that was already finalized.
       this.armHangupTimer();
+      this.maxWaitTimer = setTimeout(() => this.sendHangupMark(), END_CALL_MAX_WAIT_MS);
       return;
     }
 
@@ -260,8 +273,23 @@ export class LiveCallSession implements VoiceSession {
     this.idleTimer = setTimeout(() => this.sendHangupMark(), END_CALL_IDLE_MS);
   }
 
+  // The caller spoke after end_call was requested: keep the call open instead of cutting them off.
+  private resumeIfCallerSpeaksAfterHangupRequest(): void {
+    if (!this.hangupRequested || this.ended) return;
+    if (Date.now() - this.hangupRequestedAt < END_CALL_RESUME_GRACE_MS) return;
+    logger.info("caller spoke after end_call, keeping the call open");
+    this.clearTimers();
+    this.hangupRequested = false;
+    this.hangupMarkSent = false;
+    this.pendingEndCallMark = null;
+  }
+
   private sendHangupMark(): void {
+    if (this.hangupMarkSent) return;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
     this.idleTimer = null;
+    this.maxWaitTimer = null;
     this.hangupMarkSent = true;
     const markName = `end-call-${Date.now()}`;
     this.pendingEndCallMark = markName;
@@ -276,8 +304,10 @@ export class LiveCallSession implements VoiceSession {
   private clearTimers(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.fallbackTimer) clearTimeout(this.fallbackTimer);
+    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
     this.idleTimer = null;
     this.fallbackTimer = null;
+    this.maxWaitTimer = null;
   }
 
   private finalizeOnce(): Promise<void> {
