@@ -105,6 +105,8 @@ describe("buildLiveSessionStart", () => {
     expect(backend).toContain("write no goodbye text yourself");
     expect(session.instructions).toContain("Never say goodbye first");
     expect(session.instructions).toContain("recap");
+    expect(session.instructions).toContain("you MUST hand off to the backend");
+    expect(backend).toContain("Always call it when asked");
   });
 
   it("does not mention end_call to the backend when that capability is off", () => {
