@@ -214,6 +214,74 @@ describe("LiveCallSession end_call", () => {
     expect(callbacks.endCall).toHaveBeenCalledOnce();
   });
 
+  it("asks Twilio to confirm playback within the max wait even if audio never goes quiet", async () => {
+    vi.useFakeTimers();
+    const { socket, callbacks } = await startSession();
+
+    socket.serverSays(functionCallEvent("call_9", "end_call", { reason: "done" }));
+    for (let i = 0; i < 20; i++) {
+      vi.advanceTimersByTime(500);
+      socket.serverSays({ type: "session.output_audio.delta", delta: "AAA=" });
+    }
+    expect(callbacks.sendMark).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the call open when the caller speaks after end_call", async () => {
+    vi.useFakeTimers();
+    const { session, socket, callbacks } = await startSession();
+
+    socket.serverSays(functionCallEvent("call_9", "end_call", { reason: "done" }));
+    vi.advanceTimersByTime(300);
+    socket.serverSays({ type: "session.output_audio.delta", delta: "AAA=" });
+    vi.advanceTimersByTime(1500);
+    socket.serverSays({ type: "session.input_transcript.delta", delta: "a ještě jedna věc" });
+    vi.advanceTimersByTime(30000);
+
+    // Even a mark that was already sent no longer hangs up once the caller has spoken.
+    const [markName] = callbacks.sendMark.mock.calls[0] as [string];
+    session.handleTwilioMark(markName);
+    expect(callbacks.endCall).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel the hang-up for the caller's own goodbye transcribed just after end_call", async () => {
+    vi.useFakeTimers();
+    const { socket, callbacks } = await startSession();
+
+    socket.serverSays(functionCallEvent("call_9", "end_call", { reason: "done" }));
+    vi.advanceTimersByTime(400);
+    socket.serverSays({ type: "session.input_transcript.delta", delta: "Na shledanou" });
+    vi.advanceTimersByTime(1200);
+
+    expect(callbacks.sendMark).toHaveBeenCalledOnce();
+  });
+
+  it("hangs up normally again after a resumed call asks for end_call a second time", async () => {
+    vi.useFakeTimers();
+    const { session, socket, callbacks } = await startSession();
+
+    socket.serverSays(functionCallEvent("call_9", "end_call", { reason: "done" }));
+    vi.advanceTimersByTime(1500);
+    socket.serverSays({ type: "session.input_transcript.delta", delta: "počkejte" });
+    callbacks.sendMark.mockClear();
+    socket.serverSays(functionCallEvent("call_10", "end_call", { reason: "done" }));
+    vi.advanceTimersByTime(1200);
+
+    expect(callbacks.sendMark).toHaveBeenCalledOnce();
+    session.handleTwilioMark(callbacks.sendMark.mock.calls[0][0] as string);
+    expect(callbacks.endCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not finalize the call until the line closes", async () => {
+    vi.useFakeTimers();
+    const { session, socket } = await startSession();
+
+    socket.serverSays(functionCallEvent("call_9", "end_call", { reason: "done" }));
+    expect(mocks.generateCallSummary).not.toHaveBeenCalled();
+
+    await session.end();
+    expect(mocks.generateCallSummary).toHaveBeenCalledOnce();
+  });
+
   it("ignores a mark that is not the hang-up mark", async () => {
     vi.useFakeTimers();
     const { session, socket, callbacks } = await startSession();

@@ -258,13 +258,13 @@ export function buildTools(settings: AssistantSettings | null): OpenAITool[] {
     tools.push({
       type: "function",
       name: "end_call",
-      description: "End the phone call when the conversation is fully complete — the customer's request has been handled, any actions have been confirmed, and there is nothing more to resolve. Always say a natural closing sentence before calling this. Never use it to avoid a difficult question or mid-conversation.",
+      description: "End the phone call. The caller always has the last word: call this ONLY after you have summarised what was agreed, asked if there is anything else, and the caller has answered with a goodbye or a clear no. Never call it in the same turn as a question or a promise, and never while something the caller asked for (a confirmation email or SMS, a callback, an answer you still owe) is not done yet. Do not write any goodbye text yourself: the voice assistant says it.",
       parameters: {
         type: "object",
         properties: {
           reason: {
             type: "string",
-            description: "Brief reason why the call is being ended (e.g. 'appointment booked', 'enquiry logged', 'question answered').",
+            description: "What was handled and how the caller closed the call (e.g. 'appointment booked, caller said goodbye', 'enquiry logged, caller needs nothing else').",
           },
         },
         required: ["reason"],

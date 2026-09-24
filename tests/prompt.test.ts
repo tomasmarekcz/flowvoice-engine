@@ -98,6 +98,14 @@ describe("buildTools", () => {
     expect(tools.map((t) => t.name)).toContain("web_search");
   });
 
+  it("end_call only fires after the caller has the last word and nothing is left open", () => {
+    const tools = buildTools({ ...BASE, capabilities: { end_call: true } });
+    const endCall = tools.find((t) => t.name === "end_call")!;
+    expect(endCall.description).toContain("last word");
+    expect(endCall.description).toContain("ONLY after");
+    expect(endCall.description).toContain("confirmation email");
+  });
+
   it("includes domain restriction in web_search description when domains configured", () => {
     const tools = buildTools({
       ...BASE,
