@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
@@ -90,5 +90,40 @@ describe("sendSmsNotifications", () => {
     });
 
     expect(result.ownerSent).toBe(false);
+  });
+
+  describe("on staging", () => {
+    beforeEach(() => {
+      process.env.APP_ENV = "staging";
+      process.env.STAGING_ALLOWED_PHONES = "+420111222333";
+    });
+    afterEach(() => {
+      delete process.env.APP_ENV;
+      delete process.env.STAGING_ALLOWED_PHONES;
+    });
+
+    it("does not send to a phone outside the allowlist and reports it as not sent", async () => {
+      const result = await sendSmsNotifications({
+        ownerSms: "hi",
+        ownerPhone: "+420999000111",
+        callerSms: "hello",
+        callerPhone: "+420721071534",
+      });
+
+      expect(result).toEqual({ ownerSent: false, callerSent: false, ownerSid: null, callerSid: null });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("sends to an allowlisted phone", async () => {
+      const result = await sendSmsNotifications({
+        ownerSms: "hi",
+        ownerPhone: "+420111222333",
+        callerSms: null,
+        callerPhone: null,
+      });
+
+      expect(result.ownerSent).toBe(true);
+      expect(mockFetch).toHaveBeenCalledOnce();
+    });
   });
 });

@@ -4,6 +4,9 @@ import { WebSocketServer } from "ws";
 import { handleTwilioVoiceWebhook, handleRecordingStatusCallback, handleDialStatusCallback, handleSmsStatusCallback, handleTwilioConnection } from "./handlers/twilio";
 import { handleBrowserConnection } from "./handlers/browser";
 import { logger } from "./logger";
+import { assertEnvironmentSafe } from "./environment";
+
+assertEnvironmentSafe(); // throws (process exits) if the environment label and the database disagree
 
 const app = express();
 app.use(express.json());

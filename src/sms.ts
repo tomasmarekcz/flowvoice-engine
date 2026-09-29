@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { isRecipientAllowed } from "./environment";
 import type { TranscriptEntry } from "./call-logger";
 
 // Calls shorter than this are just a greeting and a hang-up; an SMS would cost
@@ -9,6 +10,13 @@ export const MIN_SMS_CALL_SECONDS = 15;
 export function shouldSkipCallSms(durationSeconds: number, transcript: TranscriptEntry[]): boolean {
   if (durationSeconds < MIN_SMS_CALL_SECONDS) return true;
   return !transcript.some((t) => t.role === "user" && t.text.trim().length > 0);
+}
+
+// On staging only allowlisted phones may receive an SMS; production always passes.
+function isAllowedTarget(to: string): boolean {
+  if (isRecipientAllowed("phone", to)) return true;
+  logger.warn("SMS blocked: recipient not in staging allowlist", { to_suffix: to.slice(-4) });
+  return false;
 }
 
 export interface SmsTargets {
@@ -62,7 +70,7 @@ export async function sendSmsNotifications(
   let ownerSid: string | null = null;
   let callerSid: string | null = null;
 
-  if (targets.ownerSms && targets.ownerPhone) {
+  if (targets.ownerSms && targets.ownerPhone && isAllowedTarget(targets.ownerPhone)) {
     try {
       ownerSid = await sendOneSms(targets.ownerPhone, targets.ownerSms);
       ownerSent = true;
@@ -72,7 +80,7 @@ export async function sendSmsNotifications(
     }
   }
 
-  if (targets.callerSms && targets.callerPhone) {
+  if (targets.callerSms && targets.callerPhone && isAllowedTarget(targets.callerPhone)) {
     try {
       callerSid = await sendOneSms(targets.callerPhone, targets.callerSms);
       callerSent = true;
