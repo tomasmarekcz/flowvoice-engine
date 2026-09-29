@@ -3,17 +3,18 @@
 // the production behavior; staging must opt in explicitly.
 
 export type AppEnv = "production" | "staging";
+type Env = Record<string, string | undefined>;
 
 // Public project ref of the production Supabase project (not a secret).
 export const PROD_SUPABASE_REF = "gnobailsforiruhyplnl";
 
-export function getAppEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
+export function getAppEnv(env: Env = process.env): AppEnv {
   return env.APP_ENV === "staging" ? "staging" : "production";
 }
 
 // Refuses to run when the environment label and the database disagree.
 // Only enforced for real deployments (NODE_ENV=production) so local dev and tests are unaffected.
-export function assertEnvironmentSafe(env: NodeJS.ProcessEnv = process.env): void {
+export function assertEnvironmentSafe(env: Env = process.env): void {
   if (env.NODE_ENV !== "production") return;
   const url = env.SUPABASE_URL ?? env.NEXT_PUBLIC_SUPABASE_URL ?? "";
   const pointsAtProd = url.includes(PROD_SUPABASE_REF);
@@ -41,7 +42,7 @@ function parseList(value: string | undefined): string[] {
 export function isRecipientAllowed(
   kind: "phone" | "email",
   to: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: Env = process.env
 ): boolean {
   if (getAppEnv(env) === "production") return true;
   if (kind === "phone") {
