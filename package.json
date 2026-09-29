@@ -8,6 +8,7 @@
     "start": "node dist/index.js",
     "test": "vitest run --config vitest.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:staging": "vitest run --config vitest.staging.config.ts",
     "test:all": "npm test && npm run test:integration"
   },
   "dependencies": {
