@@ -1,0 +1,25 @@
+name: Staging start
+
+on:
+  workflow_dispatch: {}
+  workflow_call: {}
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start staging server
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+        run: |
+          aws ec2 start-instances --instance-ids "${{ secrets.STAGING_INSTANCE_ID }}"
+          aws ec2 wait instance-running --instance-ids "${{ secrets.STAGING_INSTANCE_ID }}"
+      - name: Wait for SSH
+        run: |
+          for i in $(seq 1 30); do
+            nc -z -w 3 "${{ secrets.STAGING_EC2_HOST }}" 22 && exit 0
+            sleep 5
+          done
+          echo "SSH did not come up"; exit 1

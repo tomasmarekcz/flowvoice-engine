@@ -1,51 +1,106 @@
-name: Test & Deploy Engine
+name: Test, Build & Deploy to Staging
 
 on:
   push:
     branches: [main]
+
+concurrency:
+  group: engine-pipeline
+  cancel-in-progress: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4.2.2
-
       - uses: actions/setup-node@v4.4.0
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
+      - run: npm ci
       - name: TypeScript check
         run: npx tsc --noEmit
-
       - name: Unit tests
         run: npm test
-
-      - name: Integration tests (Supabase)
+      - name: Integration tests (staging Supabase — never production)
         run: npm run test:integration
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
 
-  deploy:
+  build:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to EC2
+      - uses: actions/checkout@v4.2.2
+      - name: Build image and save it as a file
+        run: |
+          docker build --platform linux/amd64 -t flowvoice-engine:${{ github.sha }} .
+          docker save flowvoice-engine:${{ github.sha }} | gzip > engine-${{ github.sha }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-image-${{ github.sha }}
+          path: engine-${{ github.sha }}.tar.gz
+          retention-days: 30
+
+  staging-up:
+    needs: build
+    uses: ./.github/workflows/staging-start.yml
+    secrets: inherit
+
+  deploy-staging:
+    needs: staging-up
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-image-${{ github.sha }}
+      - name: Put the deploy script next to the image
+        run: cp deploy/deploy-engine.sh deploy-engine.sh
+      - name: Copy image and script to staging
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.STAGING_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.STAGING_EC2_KEY }}
+          source: "engine-${{ github.sha }}.tar.gz,deploy-engine.sh"
+          target: "~/deploy/"
+      - name: Deploy on staging
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.STAGING_EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.EC2_KEY }}
+          key: ${{ secrets.STAGING_EC2_KEY }}
           script: |
-            cd ~/flowvoice-engine
-            git pull origin main
-            docker build -t flowvoice-engine .
-            docker stop engine || true
-            docker rm engine || true
-            docker run -d --restart=always --env-file .env --network host --name engine flowvoice-engine
-            echo "✅ Engine deployed"
+            chmod +x ~/deploy/deploy-engine.sh
+            ~/deploy/deploy-engine.sh ${{ github.sha }} ~/deploy/engine-${{ github.sha }}.tar.gz
+            rm -f ~/deploy/engine-${{ github.sha }}.tar.gz
+
+  smoke-staging:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Smoke scenarios against staging
+        run: npm run test:staging
+        env:
+          STAGING_BASE_URL: https://staging.leadoro.io
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          STAGING_PROJECT_ID: ${{ secrets.STAGING_PROJECT_ID }}
+          STAGING_TWILIO_AUTH_TOKEN: ${{ secrets.STAGING_TWILIO_AUTH_TOKEN }}
+          STAGING_ENGINE_INTERNAL_SECRET: ${{ secrets.STAGING_ENGINE_INTERNAL_SECRET }}
+      - name: Summary for the owner
+        if: success()
+        run: |
+          echo "### ✅ Staging je zelený" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verze \`${{ github.sha }}\` je na staging.leadoro.io a automatické scénáře prošly." >> "$GITHUB_STEP_SUMMARY"
+          echo "Další krok: zavolej na testovací číslo, a pokud je vše v pořádku, spusť workflow **Promote engine to production** se sha \`${{ github.sha }}\`." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,79 @@
+name: Promote engine to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA that passed staging (the same image is deployed, no rebuild)"
+        required: false
+      rollback:
+        description: "Tick to roll back to the previous production version instead"
+        type: boolean
+        default: false
+
+concurrency:
+  group: engine-production
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Require a SHA unless rolling back
+        if: ${{ !inputs.rollback && inputs.sha == '' }}
+        run: echo "Enter the commit SHA that passed staging."; exit 1
+
+      - name: Roll back
+        if: ${{ inputs.rollback }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          script: ~/deploy/deploy-engine.sh --rollback
+
+      - name: Find the staging run for this commit
+        if: ${{ !inputs.rollback }}
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --workflow "Test, Build & Deploy to Staging" --commit "${{ inputs.sha }}" \
+                 --status success --json databaseId --jq '.[0].databaseId')
+          if [ -z "$id" ]; then echo "No successful staging run for this commit — it has not passed staging."; exit 1; fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: ${{ !inputs.rollback }}
+        with:
+          name: engine-image-${{ inputs.sha }}
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+
+      - name: Put the deploy script next to the image
+        if: ${{ !inputs.rollback }}
+        run: cp deploy/deploy-engine.sh deploy-engine.sh
+
+      - name: Copy image and script to production
+        if: ${{ !inputs.rollback }}
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          source: "engine-${{ inputs.sha }}.tar.gz,deploy-engine.sh"
+          target: "~/deploy/"
+
+      - name: Deploy on production (health check + automatic rollback inside the script)
+        if: ${{ !inputs.rollback }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            chmod +x ~/deploy/deploy-engine.sh
+            ~/deploy/deploy-engine.sh ${{ inputs.sha }} ~/deploy/engine-${{ inputs.sha }}.tar.gz
+            rm -f ~/deploy/engine-${{ inputs.sha }}.tar.gz
