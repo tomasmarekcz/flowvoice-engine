@@ -7,7 +7,8 @@ process.env.TWILIO_ACCOUNT_SID = "ACtest123";
 process.env.TWILIO_AUTH_TOKEN = "authtest";
 process.env.TWILIO_SMS_FROM = "FlowVoice";
 
-const { sendSmsNotifications } = await import("../src/sms");
+const smsModule = await import("../src/sms");
+const { sendSmsNotifications } = smsModule;
 
 describe("sendSmsNotifications", () => {
   beforeEach(() => {

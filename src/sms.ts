@@ -1,4 +1,15 @@
 import { logger } from "./logger";
+import type { TranscriptEntry } from "./call-logger";
+
+// Calls shorter than this are just a greeting and a hang-up; an SMS would cost
+// money and tell the owner nothing. The call itself still appears in the dashboard.
+export const MIN_SMS_CALL_SECONDS = 15;
+
+// True when a call is too short, or the caller never said anything, to be worth an SMS.
+export function shouldSkipCallSms(durationSeconds: number, transcript: TranscriptEntry[]): boolean {
+  if (durationSeconds < MIN_SMS_CALL_SECONDS) return true;
+  return !transcript.some((t) => t.role === "user" && t.text.trim().length > 0);
+}
 
 export interface SmsTargets {
   ownerSms: string | null;

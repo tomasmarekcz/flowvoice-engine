@@ -4,7 +4,7 @@ import { loadAssistantSettings, AssistantSettings } from "./config";
 import { logger } from "./logger";
 import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
-import { sendSmsNotifications } from "./sms";
+import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
 export function formatOwnerSms(
@@ -174,10 +174,13 @@ export class CallSession implements VoiceSession {
     if (this.openaiWs?.readyState === WebSocket.OPEN) this.openaiWs.close();
     const apiKey = process.env.OPENAI_API_KEY ?? "";
 
+    const skipSms = shouldSkipCallSms(this.logger.callDurationSeconds, this.logger.transcript);
+    if (skipSms) logger.info("skipping SMS: short call or caller said nothing", { seconds: this.logger.callDurationSeconds });
+
     const smsOptions: SmsOptions | undefined = this.settings
       ? {
-          smsOwnerEnabled: this.settings.sms_owner_enabled ?? false,
-          smsCallerEnabled: this.settings.sms_caller_enabled ?? false,
+          smsOwnerEnabled: !skipSms && (this.settings.sms_owner_enabled ?? false),
+          smsCallerEnabled: !skipSms && (this.settings.sms_caller_enabled ?? false),
           smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
           smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
           emailOwnerEnabled: this.settings.email_owner_enabled ?? false,

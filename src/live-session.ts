@@ -12,7 +12,7 @@ import {
 } from "./live-protocol";
 import { formatOwnerSms } from "./session";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
-import { sendSmsNotifications } from "./sms";
+import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
 import { executeTool as defaultExecuteTool } from "./tools";
 
 const START_TIMEOUT_MS = 4000;
@@ -319,10 +319,13 @@ export class LiveCallSession implements VoiceSession {
     this.transcript.flush();
     const apiKey = process.env.OPENAI_API_KEY ?? "";
 
+    const skipSms = shouldSkipCallSms(this.logger.callDurationSeconds, this.logger.transcript);
+    if (skipSms) logger.info("skipping SMS: short call or caller said nothing", { seconds: this.logger.callDurationSeconds });
+
     const smsOptions: SmsOptions | undefined = this.settings
       ? {
-          smsOwnerEnabled: this.settings.sms_owner_enabled ?? false,
-          smsCallerEnabled: this.settings.sms_caller_enabled ?? false,
+          smsOwnerEnabled: !skipSms && (this.settings.sms_owner_enabled ?? false),
+          smsCallerEnabled: !skipSms && (this.settings.sms_caller_enabled ?? false),
           smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
           smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
           emailOwnerEnabled: this.settings.email_owner_enabled ?? false,

@@ -12,7 +12,10 @@ vi.mock("../src/call-logger", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/call-logger")>();
   return { ...actual, generateCallSummary: mocks.generateCallSummary };
 });
-vi.mock("../src/sms", () => ({ sendSmsNotifications: mocks.sendSmsNotifications }));
+vi.mock("../src/sms", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/sms")>()),
+  sendSmsNotifications: mocks.sendSmsNotifications,
+}));
 
 vi.stubGlobal("fetch", vi.fn());
 process.env.OPENAI_API_KEY = "test-key";
