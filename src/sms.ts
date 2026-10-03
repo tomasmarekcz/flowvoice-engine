@@ -18,18 +18,21 @@ export interface SmsTargets {
   callerPhone: string | null;
 }
 
-async function sendOneSms(to: string, body: string): Promise<void> {
+// Returns the Twilio message SID so delivery reports can be matched to the call later.
+async function sendOneSms(to: string, body: string): Promise<string | null> {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const from = process.env.TWILIO_SMS_FROM ?? "FlowVoice";
+  const from = process.env.TWILIO_SMS_FROM ?? "Leadoro";
 
   if (!accountSid || !authToken) {
     logger.warn("SMS not configured — TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN missing");
-    return;
+    return null;
   }
 
   const credentials = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
   const params = new URLSearchParams({ From: from, To: to, Body: body });
+  const engineHost = process.env.ENGINE_HOST;
+  if (engineHost) params.set("StatusCallback", `https://${engineHost}/twilio/sms-status`);
 
   const res = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
@@ -47,17 +50,21 @@ async function sendOneSms(to: string, body: string): Promise<void> {
     const text = await res.text();
     throw new Error(`Twilio SMS error ${res.status}: ${text}`);
   }
+  const data = (await res.json().catch(() => null)) as { sid?: string } | null;
+  return data?.sid ?? null;
 }
 
 export async function sendSmsNotifications(
   targets: SmsTargets
-): Promise<{ ownerSent: boolean; callerSent: boolean }> {
+): Promise<{ ownerSent: boolean; callerSent: boolean; ownerSid: string | null; callerSid: string | null }> {
   let ownerSent = false;
   let callerSent = false;
+  let ownerSid: string | null = null;
+  let callerSid: string | null = null;
 
   if (targets.ownerSms && targets.ownerPhone) {
     try {
-      await sendOneSms(targets.ownerPhone, targets.ownerSms);
+      ownerSid = await sendOneSms(targets.ownerPhone, targets.ownerSms);
       ownerSent = true;
       logger.info("owner SMS sent", { to: targets.ownerPhone });
     } catch (e) {
@@ -67,7 +74,7 @@ export async function sendSmsNotifications(
 
   if (targets.callerSms && targets.callerPhone) {
     try {
-      await sendOneSms(targets.callerPhone, targets.callerSms);
+      callerSid = await sendOneSms(targets.callerPhone, targets.callerSms);
       callerSent = true;
       logger.info("caller SMS sent", { to: targets.callerPhone });
     } catch (e) {
@@ -75,5 +82,5 @@ export async function sendSmsNotifications(
     }
   }
 
-  return { ownerSent, callerSent };
+  return { ownerSent, callerSent, ownerSid, callerSid };
 }

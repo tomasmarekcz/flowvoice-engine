@@ -5,7 +5,7 @@ vi.stubGlobal("fetch", mockFetch);
 
 process.env.TWILIO_ACCOUNT_SID = "ACtest123";
 process.env.TWILIO_AUTH_TOKEN = "authtest";
-process.env.TWILIO_SMS_FROM = "FlowVoice";
+process.env.TWILIO_SMS_FROM = "Leadoro";
 
 const smsModule = await import("../src/sms");
 const { sendSmsNotifications } = smsModule;
@@ -32,7 +32,25 @@ describe("sendSmsNotifications", () => {
     expect(url).toContain("ACtest123/Messages.json");
     expect(opts.method).toBe("POST");
     expect(opts.body).toContain("To=%2B420777000111");
-    expect(opts.body).toContain("From=FlowVoice");
+    expect(opts.body).toContain("From=Leadoro");
+  });
+
+  it("returns the Twilio message SIDs and asks for delivery reports when ENGINE_HOST is set", async () => {
+    process.env.ENGINE_HOST = "leadoro.io";
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ sid: "SM999" }) });
+
+    const result = await sendSmsNotifications({
+      ownerSms: "Owner summary.",
+      ownerPhone: "+420777000111",
+      callerSms: null,
+      callerPhone: null,
+    });
+    delete process.env.ENGINE_HOST;
+
+    expect(result.ownerSid).toBe("SM999");
+    expect(result.callerSid).toBeNull();
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(opts.body).toContain("StatusCallback=https%3A%2F%2Fleadoro.io%2Ftwilio%2Fsms-status");
   });
 
   it("sends both SMS when both are set", async () => {

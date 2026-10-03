@@ -196,6 +196,65 @@ export async function handleRecordingStatusCallback(req: Request, res: Response)
   }
 }
 
+// Twilio reports delivery of each SMS here. Only final outcomes are stored, so an
+// out-of-order "sent" can never overwrite "delivered". Carriers that do not return
+// delivery receipts simply leave the status empty (unconfirmed, not failed).
+const FINAL_SMS_STATUSES = new Set(["delivered", "undelivered", "failed"]);
+const SMS_STATUS_RETRY_MS = [3_000, 10_000, 30_000];
+
+async function storeSmsDeliveryStatus(sid: string, status: string, errorCode: string | null): Promise<boolean> {
+  for (const who of ["owner", "caller"] as const) {
+    const res = await fetch(
+      `${getSupabaseUrl()}/rest/v1/calls?sms_${who}_sid=eq.${encodeURIComponent(sid)}`,
+      {
+        method: "PATCH",
+        headers: { ...getSupabaseHeaders(), Prefer: "return=representation" },
+        body: JSON.stringify({ [`sms_${who}_status`]: status, [`sms_${who}_error_code`]: errorCode }),
+      }
+    );
+    const rows = res.ok ? ((await res.json()) as unknown[]) : [];
+    if (rows.length > 0) return true;
+  }
+  return false;
+}
+
+export async function handleSmsStatusCallback(req: Request, res: Response): Promise<void> {
+  if (process.env.TWILIO_SKIP_VALIDATION !== "true") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const twilio = require("twilio") as {
+      validateRequest: (token: string, sig: string, url: string, params: Record<string, string>) => boolean;
+    };
+    const signature = (req.headers["x-twilio-signature"] as string) ?? "";
+    const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "";
+    const url = `https://${engineHost}/twilio/sms-status`;
+    if (!twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN ?? "", signature, url, req.body as Record<string, string>)) {
+      res.status(403).send("Forbidden");
+      return;
+    }
+  }
+
+  const body = req.body as Record<string, string>;
+  const sid = body["MessageSid"] ?? body["SmsSid"] ?? "";
+  const status = body["MessageStatus"] ?? body["SmsStatus"] ?? "";
+
+  res.sendStatus(200);
+  if (!sid || !FINAL_SMS_STATUSES.has(status)) return;
+
+  const errorCode = body["ErrorCode"] || null;
+  if (status !== "delivered") logger.warn("sms not delivered", { sid, status, error_code: errorCode });
+
+  // The call row may not carry the SID yet when the report arrives very fast.
+  for (let attempt = 0; attempt <= SMS_STATUS_RETRY_MS.length; attempt++) {
+    try {
+      if (await storeSmsDeliveryStatus(sid, status, errorCode)) return;
+    } catch (e) {
+      logger.error("sms status store error", { err: e, sid });
+    }
+    if (attempt < SMS_STATUS_RETRY_MS.length) await new Promise((r) => setTimeout(r, SMS_STATUS_RETRY_MS[attempt]));
+  }
+  logger.warn("sms status: no call row found for sid", { sid, status });
+}
+
 export async function handleTwilioConnection(
   ws: WS,
   _request: IncomingMessage

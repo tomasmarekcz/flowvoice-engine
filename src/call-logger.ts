@@ -190,6 +190,7 @@ export class CallLogger {
     smsCallerText: string | null = null,
     emailOwnerText: string | null = null,
     tokenUsage: TokenUsage = ZERO_TOKEN_USAGE,
+    smsSids: { owner: string | null; caller: string | null } = { owner: null, caller: null },
   ): Promise<void> {
     if (!this.enabled || !this.callId) return;
     const endMs = Date.now();
@@ -217,6 +218,8 @@ export class CallLogger {
           sms_caller_sent: smsCallerSent,
           sms_owner_text: smsOwnerText ?? null,
           sms_caller_text: smsCallerText ?? null,
+          sms_owner_sid: smsSids.owner,
+          sms_caller_sid: smsSids.caller,
           email_owner_text: emailOwnerText ?? null,
           realtime_audio_input_tokens:  tokenUsage.realtimeAudioIn,
           realtime_audio_output_tokens: tokenUsage.realtimeAudioOut,

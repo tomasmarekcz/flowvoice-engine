@@ -1,7 +1,7 @@
 import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
-import { handleTwilioVoiceWebhook, handleRecordingStatusCallback, handleDialStatusCallback, handleTwilioConnection } from "./handlers/twilio";
+import { handleTwilioVoiceWebhook, handleRecordingStatusCallback, handleDialStatusCallback, handleSmsStatusCallback, handleTwilioConnection } from "./handlers/twilio";
 import { handleBrowserConnection } from "./handlers/browser";
 import { logger } from "./logger";
 
@@ -16,6 +16,7 @@ app.get("/health", (_req, res) => {
 app.post("/twilio/voice", handleTwilioVoiceWebhook);
 app.post("/twilio/voice/dial-status", handleDialStatusCallback);
 app.post("/twilio/recording-status", handleRecordingStatusCallback);
+app.post("/twilio/sms-status", handleSmsStatusCallback);
 
 const server = http.createServer(app);
 

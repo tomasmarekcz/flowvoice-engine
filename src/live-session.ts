@@ -358,7 +358,7 @@ export class LiveCallSession implements VoiceSession {
         })
       : null;
 
-    const { ownerSent, callerSent } = await sendSmsNotifications({
+    const { ownerSent, callerSent, ownerSid, callerSid } = await sendSmsNotifications({
       ownerSms: ownerSmsFinal,
       ownerPhone: this.settings?.owner_phone ?? null,
       callerSms,
@@ -372,7 +372,7 @@ export class LiveCallSession implements VoiceSession {
       searchEmbedding: this.embeddingTokens,
     };
 
-    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage);
+    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
 
     if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {
       const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";

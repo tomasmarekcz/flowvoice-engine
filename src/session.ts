@@ -213,7 +213,7 @@ export class CallSession implements VoiceSession {
         })
       : null;
 
-    const { ownerSent, callerSent } = await sendSmsNotifications({
+    const { ownerSent, callerSent, ownerSid, callerSid } = await sendSmsNotifications({
       ownerSms: ownerSmsFinal,
       ownerPhone: this.settings?.owner_phone ?? null,
       callerSms,
@@ -230,7 +230,7 @@ export class CallSession implements VoiceSession {
       searchEmbedding:  this.usageAccum.searchEmbedding,
     };
 
-    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage);
+    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
 
     // Send email notification if enabled
     if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {
