@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import type { AssistantSettings } from "../src/config";
 import {
-  LIVE_CONVERSATION_PROMPT,
+  buildLiveVoicePrompt,
   pickLiveVoice,
   buildLiveGreetingInstruction,
   buildLiveSessionStart,
@@ -60,12 +60,12 @@ describe("buildLiveSessionStart", () => {
   });
 
   it("targets gpt-live-1 with 8 kHz mu-law audio and responses delegation", () => {
-    const { message } = buildLiveSessionStart(settings(), "+420111222333");
+    const { message, tools } = buildLiveSessionStart(settings(), "+420111222333");
     const session = message["session"] as StartSession;
 
     expect(message["type"]).toBe("session.start");
     expect(session.model).toBe("gpt-live-1");
-    expect(session.instructions).toBe(LIVE_CONVERSATION_PROMPT);
+    expect(session.instructions).toBe(buildLiveVoicePrompt(settings(), tools));
     expect(session.audio.format).toEqual({ type: "audio/pcmu", rate: 8000 });
     expect(session.audio.output.voice).toBe("alloy");
     expect(session.delegation.type).toBe("responses");
@@ -127,6 +127,40 @@ describe("buildLiveSessionStart", () => {
     const session = message["session"] as StartSession;
     expect(session.model).toBe("gpt-live-2");
     expect(session.delegation.responses.model).toBe("some-backend");
+  });
+});
+
+describe("buildLiveVoicePrompt", () => {
+  const prompt = () => {
+    const { tools } = buildLiveSessionStart(settings(), null);
+    return buildLiveVoicePrompt(
+      settings({ _project_name: "Ordinace Test", _project_industry: "Dentist", _project_language: "cs" }),
+      tools
+    );
+  };
+
+  it("carries the business identity and the dashboard instructions", () => {
+    const text = prompt();
+    expect(text).toContain("Ordinace Test");
+    expect(text).toContain("Dentist");
+    expect(text).toContain("Be kind");
+  });
+
+  it("follows the caller's language, never the project's default language", () => {
+    const text = prompt();
+    expect(text).toContain("language the caller is speaking right now");
+    expect(text).not.toContain("Default language");
+  });
+
+  it("tells the voice model to use the backend often and for which requests", () => {
+    const text = prompt();
+    expect(text).toContain("lean on the backend OFTEN");
+    expect(text).toContain("knowledge base");
+    expect(text).toContain("end_call");
+  });
+
+  it("keeps the hard rule to hand off ending the call", () => {
+    expect(prompt()).toContain("HARD RULE for ending the call");
   });
 });
 
