@@ -38,7 +38,7 @@ export function buildLiveGreetingInstruction(settings: AssistantSettings | null)
   if (!settings?.greeting_enabled) return null;
   const msg = settings.greeting_message?.trim();
   if (!msg) return null;
-  return `The call has just connected. Speak first. Say exactly this, word for word, then wait for the caller:\n\n"${msg}"`;
+  return `The call has just connected. SPEAK NOW (mluv hned): start talking immediately, do not wait for the caller to say anything first. Say exactly this, word for word, once, then wait for the caller:\n\n"${msg}"\n\nSay the greeting only once. Never repeat it later in the call, even if the caller says hello again.`;
 }
 
 export function buildLiveSessionStart(

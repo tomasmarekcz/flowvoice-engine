@@ -129,6 +129,13 @@ describe("LiveCallSession start", () => {
     expect(greeting["delegation_id"]).toBeNull();
   });
 
+  it("asks the model to speak right away instead of waiting for the caller", async () => {
+    const { socket } = await startSession(
+      baseSettings({ greeting_enabled: true, greeting_message: "Hello from Acme" })
+    );
+    expect(socket.sentOfType("response.create")).toHaveLength(1);
+  });
+
   it("does not wait for the database write before greeting the caller", async () => {
     const { CallLogger } = await import("../src/call-logger");
     const createCall = vi.spyOn(CallLogger.prototype, "createCall").mockReturnValue(new Promise(() => {}));

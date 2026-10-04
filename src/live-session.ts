@@ -174,6 +174,9 @@ export class LiveCallSession implements VoiceSession {
       delegation_id: null,
       content: greeting,
     });
+    // Appending instructions alone does not make the model talk: without this it stayed
+    // silent until the caller spoke first.
+    this.send({ type: "response.create", event_id: "greeting_response" });
   }
 
   private async handleMessage(raw: string): Promise<void> {

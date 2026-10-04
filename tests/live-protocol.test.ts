@@ -135,6 +135,12 @@ describe("buildLiveGreetingInstruction", () => {
     expect(buildLiveGreetingInstruction(settings())).toContain("Hello from Acme");
   });
 
+  it("tells the model to speak now and only once", () => {
+    const text = buildLiveGreetingInstruction(settings()) ?? "";
+    expect(text).toContain("SPEAK NOW");
+    expect(text).toContain("only once");
+  });
+
   it("returns null when disabled, empty or missing", () => {
     expect(buildLiveGreetingInstruction(settings({ greeting_enabled: false }))).toBeNull();
     expect(buildLiveGreetingInstruction(settings({ greeting_message: "   " }))).toBeNull();
