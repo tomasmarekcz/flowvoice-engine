@@ -323,12 +323,13 @@ ${responseShape}`;
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-5.4-mini-2026-03-17",
+        model: "gpt-5.6-luna",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: lines.slice(0, 6000) },
         ],
         response_format: { type: "json_object" },
+        reasoning_effort: "low",
         max_completion_tokens: 2000,
       }),
     });
