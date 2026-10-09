@@ -1,17 +1,39 @@
 name: Staging stop
 
+# Staging only runs while it is needed: it is switched on by a deployment (or by hand) and this
+# job switches it off again once it has been running for MAX_HOURS. Run it by hand to stop it now.
 on:
   schedule:
-    - cron: "0 21 * * *" # 23:00 Prague summer time — staging is off overnight to save money
-  workflow_dispatch: {}
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      now:
+        description: "Stop immediately, regardless of how long it has been running"
+        type: boolean
+        default: false
+
+env:
+  MAX_HOURS: 2
 
 jobs:
   stop:
     runs-on: ubuntu-latest
     steps:
-      - name: Stop staging server
+      - name: Stop staging when it has been running long enough
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: eu-central-1
-        run: aws ec2 stop-instances --instance-ids "${{ secrets.STAGING_INSTANCE_ID }}"
+          ID: ${{ secrets.STAGING_INSTANCE_ID }}
+          STOP_NOW: ${{ inputs.now }}
+        run: |
+          read -r STATE LAUNCH <<< "$(aws ec2 describe-instances --instance-ids "$ID" \
+            --query 'Reservations[0].Instances[0].[State.Name,LaunchTime]' --output text)"
+          echo "state=$STATE launched=$LAUNCH"
+          [ "$STATE" = "running" ] || { echo "Not running, nothing to do."; exit 0; }
+          age=$(( $(date +%s) - $(date -d "$LAUNCH" +%s) ))
+          echo "running for $(( age / 60 )) minutes (limit $(( MAX_HOURS * 60 )))"
+          if [ "$STOP_NOW" = "true" ] || [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
+            aws ec2 stop-instances --instance-ids "$ID"
+            echo "Stopped."
+          fi

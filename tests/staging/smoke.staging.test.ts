@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from "vitest";
 import twilio from "twilio";
-import { cfg, configured, supabaseGet, supabaseDelete, waitFor, simulateCall } from "./helpers";
+import { cfg, configured, validationOn, supabaseGet, supabaseDelete, waitFor, simulateCall } from "./helpers";
 
 const runId = `smoke-${Date.now()}`;
 
@@ -18,7 +18,7 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
     expect(await dash.json()).toEqual({ ok: true, env: "staging" });
   });
 
-  it("the Twilio voice webhook rejects unsigned requests and answers signed ones", async () => {
+  it("the Twilio voice webhook behaves like production (signature check follows STAGING_TWILIO_VALIDATION)", async () => {
     const url = `${cfg.base}/twilio/voice`;
     const params = { CallSid: `CA${runId}-w`, From: "sip:+420111222333@sip.zadarma.com", To: "+420000000000" };
     const unsigned = await fetch(`${url}?project_id=${cfg.projectId}`, {
@@ -26,6 +26,11 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(params).toString(),
     });
+    if (!validationOn) {
+      expect(unsigned.status).toBe(200);
+      expect(await unsigned.text()).toContain("/ws/twilio");
+      return;
+    }
     expect(unsigned.status).toBe(403);
 
     const signature = twilio.getExpectedTwilioSignature(cfg.twilioToken, url, params);
@@ -92,7 +97,7 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
     expect(event.ok).toBe(true);
   });
 
-  it("staging cannot be used to bill: the cron endpoint is disabled", async () => {
+  it("the billing cron rejects a wrong secret", async () => {
     const r = await fetch(`${cfg.base}/api/cron/billing-maintenance`, {
       method: "POST",
       headers: { "x-cron-secret": "anything" },

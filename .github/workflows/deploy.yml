@@ -96,7 +96,7 @@ jobs:
           STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
           STAGING_PROJECT_ID: ${{ secrets.STAGING_PROJECT_ID }}
-          STAGING_TWILIO_AUTH_TOKEN: ${{ secrets.STAGING_TWILIO_AUTH_TOKEN }}
+          STAGING_TWILIO_VALIDATION: "off" # mirrors production until LEA-59 turns signature checking on
           STAGING_ENGINE_INTERNAL_SECRET: ${{ secrets.STAGING_ENGINE_INTERNAL_SECRET }}
       - name: Summary for the owner
         if: success()

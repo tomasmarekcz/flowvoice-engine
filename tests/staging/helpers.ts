@@ -9,7 +9,13 @@ export const cfg = {
   internalSecret: process.env.STAGING_ENGINE_INTERNAL_SECRET ?? "",
 };
 
-export const configured = Object.values(cfg).every(Boolean);
+// Staging mirrors production: Twilio signature checking is OFF there today (LEA-59). Set
+// STAGING_TWILIO_VALIDATION=on once it is switched on; the signed-webhook scenario then needs the token.
+export const validationOn = process.env.STAGING_TWILIO_VALIDATION === "on";
+
+export const configured =
+  [cfg.base, cfg.supabaseUrl, cfg.serviceKey, cfg.projectId, cfg.internalSecret].every(Boolean) &&
+  (!validationOn || !!cfg.twilioToken);
 
 const sbHeaders = () => ({ apikey: cfg.serviceKey, Authorization: `Bearer ${cfg.serviceKey}` });
 
