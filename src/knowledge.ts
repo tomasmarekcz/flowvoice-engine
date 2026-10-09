@@ -1,7 +1,10 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 import OpenAI from "openai";
 
-const COLLECTION = "documents";
+// Staging uses its own collection so tests can never touch production knowledge.
+function collection(): string {
+  return process.env.QDRANT_COLLECTION || "documents";
+}
 
 function qdrant(): QdrantClient {
   return new QdrantClient({
@@ -37,7 +40,7 @@ export async function searchKnowledge(
   const vector = embeddingRes.data[0].embedding;
   const embeddingTokens = (embeddingRes.usage as { total_tokens?: number } | undefined)?.total_tokens ?? 0;
 
-  const results = await qdrant().search(COLLECTION, {
+  const results = await qdrant().search(collection(), {
     vector,
     limit: topN,
     filter: {

@@ -8,6 +8,7 @@ import { twilioAudioToOpenAI, openAIAudioToTwilio } from "../audio";
 import { getSupabaseUrl, getSupabaseHeaders, loadAssistantSettings } from "../config";
 import { checkCallEligibility } from "../billing";
 import { decideCallRouting } from "../call-routing";
+import { isRecipientAllowed } from "../environment";
 
 const DIAL_TO_OWNER_TIMEOUT_SECONDS = 20;
 
@@ -109,7 +110,11 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
     workingHours: settings?.working_hours,
     timezone: settings?._calendar_timezone,
     // Dialing the owner when the owner is the one calling would just ring back to themselves (busy).
-    hasOwnerPhone: !!normalizePhone(settings?.owner_phone) && normalizePhone(settings?.owner_phone) !== normalizePhone(callerPhone),
+    // On staging only allowlisted phones may be rung, so a copied real owner number is never dialed.
+    hasOwnerPhone:
+      !!normalizePhone(settings?.owner_phone) &&
+      normalizePhone(settings?.owner_phone) !== normalizePhone(callerPhone) &&
+      isRecipientAllowed("phone", normalizePhone(settings?.owner_phone)),
   });
 
   logger.info("call routing decision", { project_id: projectId, is_active: settings?.is_active ?? true, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });

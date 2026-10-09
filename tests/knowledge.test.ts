@@ -106,3 +106,24 @@ describe("searchKnowledge", () => {
     expect(chunks[0]).toEqual({ text: "", filename: "", score: 0.7 });
   });
 });
+
+describe("Qdrant collection", () => {
+  beforeEach(() => {
+    mockCreate.mockResolvedValue({ data: [{ embedding: FAKE_VECTOR }] });
+    mockSearch.mockResolvedValue([]);
+  });
+
+  it("searches the shared 'documents' collection by default (production)", async () => {
+    delete process.env.QDRANT_COLLECTION;
+    await searchKnowledge("q", "proj-1", 3);
+    expect(mockSearch.mock.calls[0][0]).toBe("documents");
+  });
+
+  it("searches the collection named in QDRANT_COLLECTION (staging keeps its own)", async () => {
+    process.env.QDRANT_COLLECTION = "documents_staging";
+    await searchKnowledge("q", "proj-1", 3);
+    expect(mockSearch.mock.calls[0][0]).toBe("documents_staging");
+    delete process.env.QDRANT_COLLECTION;
+  });
+});
+

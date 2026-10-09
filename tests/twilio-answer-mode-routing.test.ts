@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
@@ -212,5 +212,35 @@ describe("dial-status callback", () => {
       .send("DialCallStatus=busy");
 
     expect(res.text).toContain("<Stream");
+  });
+});
+
+describe("on staging the owner's phone is only dialed when it is on the allowlist", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    process.env.APP_ENV = "staging";
+    process.env.STAGING_ALLOWED_PHONES = "+420700000000";
+  });
+  afterEach(() => {
+    delete process.env.APP_ENV;
+    delete process.env.STAGING_ALLOWED_PHONES;
+  });
+
+  it("does not ring a phone outside the allowlist; the AI answers instead", async () => {
+    mockSupabaseAndEligibility({ answerMode: "outside_hours", ownerPhone: "+420111222333", workingHours: ALWAYS_OPEN });
+    const res = await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA123");
+    expect(res.text).not.toContain("<Dial");
+    expect(res.text).toContain("<Stream");
+  });
+
+  it("rings an allowlisted phone", async () => {
+    mockSupabaseAndEligibility({ answerMode: "outside_hours", ownerPhone: "+420700000000", workingHours: ALWAYS_OPEN });
+    const res = await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA123");
+    expect(res.text).toContain("<Dial");
+    expect(res.text).toContain("+420700000000");
   });
 });
