@@ -43,8 +43,9 @@ export async function waitFor<T>(
   }
 }
 
-// Plays a Twilio Media Streams call against the staging engine: connect, start, wait for the
-// assistant's first audio (its greeting), send ~1.5 s of silence as the "caller", then stop.
+// Plays a Twilio Media Streams call against the staging engine: connect, start, then stream the
+// "caller" (silence, 20 ms frames in real time, exactly like Twilio does from the first second)
+// until the assistant's first audio (its greeting) arrives, keep going briefly, and stop.
 export async function simulateCall(opts: {
   callSid: string;
   callerPhone: string;
@@ -85,15 +86,21 @@ export async function simulateCall(opts: {
     })
   );
 
-  await waitFor(async () => firstAudioMs !== null, 25_000, 250);
-
   const silence = Buffer.alloc(160, 0xff).toString("base64"); // 20 ms of mu-law silence
-  for (let i = 0; i < 75; i++) {
-    ws.send(JSON.stringify({ event: "media", streamSid, media: { payload: silence } }));
-    await new Promise((r) => setTimeout(r, 20));
+  const frames = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ event: "media", streamSid, media: { payload: silence } }));
+    }
+  }, 20);
+
+  try {
+    await waitFor(async () => firstAudioMs !== null, 25_000, 250);
+    await new Promise((r) => setTimeout(r, 1_500)); // let the greeting play a moment
+  } finally {
+    clearInterval(frames);
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ event: "stop", streamSid }));
+    await new Promise((r) => setTimeout(r, 500));
+    ws.close();
   }
-  ws.send(JSON.stringify({ event: "stop", streamSid }));
-  await new Promise((r) => setTimeout(r, 500));
-  ws.close();
   return { firstAudioMs };
 }
