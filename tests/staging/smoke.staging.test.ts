@@ -93,7 +93,7 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
   });
 
   it("staging cannot be used to bill: the cron endpoint is disabled", async () => {
-    const r = await fetch(`${cfg.base}/api/cron/billing-rollup`, {
+    const r = await fetch(`${cfg.base}/api/cron/billing-maintenance`, {
       method: "POST",
       headers: { "x-cron-secret": "anything" },
     });
