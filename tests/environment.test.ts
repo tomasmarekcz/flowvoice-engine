@@ -70,4 +70,11 @@ describe("isRecipientAllowed", () => {
     expect(isRecipientAllowed("email", "qa+1@leadoro.io", env)).toBe(true);
     expect(isRecipientAllowed("email", "customer@gmail.com", env)).toBe(false);
   });
+  it("a lone * in the allowlist means no restriction (staging behaves like production)", () => {
+    expect(isRecipientAllowed("phone", "+420111222333", { APP_ENV: "staging", STAGING_ALLOWED_PHONES: "*" })).toBe(true);
+    expect(isRecipientAllowed("email", "anyone@example.com", { APP_ENV: "staging", STAGING_ALLOWED_EMAILS: "*" })).toBe(true);
+  });
+  it("* for phones does not open up e-mails", () => {
+    expect(isRecipientAllowed("email", "anyone@example.com", { APP_ENV: "staging", STAGING_ALLOWED_PHONES: "*" })).toBe(false);
+  });
 });

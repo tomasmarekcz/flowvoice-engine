@@ -38,19 +38,20 @@ function parseList(value: string | undefined): string[] {
 }
 
 // Production contacts everyone. Staging contacts only allowlisted phones / e-mails
-// (an entry starting with "@" allows a whole e-mail domain).
+// (an entry starting with "@" allows a whole e-mail domain; a lone "*" lifts the restriction,
+// which makes staging behave like production).
 export function isRecipientAllowed(
   kind: "phone" | "email",
   to: string,
   env: Env = process.env
 ): boolean {
   if (getAppEnv(env) === "production") return true;
+  const entries = parseList(kind === "phone" ? env.STAGING_ALLOWED_PHONES : env.STAGING_ALLOWED_EMAILS);
+  if (entries.includes("*")) return true;
   if (kind === "phone") {
     const target = to.replace(/\s/g, "");
-    return parseList(env.STAGING_ALLOWED_PHONES).some((p) => p.replace(/\s/g, "") === target);
+    return entries.some((p) => p.replace(/\s/g, "") === target);
   }
   const target = to.trim().toLowerCase();
-  return parseList(env.STAGING_ALLOWED_EMAILS).some((entry) =>
-    entry.startsWith("@") ? target.endsWith(entry) : entry === target
-  );
+  return entries.some((entry) => (entry.startsWith("@") ? target.endsWith(entry) : entry === target));
 }
