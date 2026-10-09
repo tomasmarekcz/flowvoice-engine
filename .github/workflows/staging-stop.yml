@@ -1,14 +1,15 @@
 name: Staging stop
 
-# Staging only runs while it is needed: it is switched on by a deployment (or by hand) and this
-# job switches it off again once it has been running for MAX_HOURS. Run it by hand to stop it now.
+# Staging only runs while it is needed: a deployment (or "Staging start") switches it on and marks
+# it as in use; this job switches it off once nothing has used it for MAX_HOURS. Run it by hand
+# with "now" ticked to stop it immediately.
 on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       now:
-        description: "Stop immediately, regardless of how long it has been running"
+        description: "Stop immediately, regardless of how recently it was used"
         type: boolean
         default: false
 
@@ -19,20 +20,31 @@ jobs:
   stop:
     runs-on: ubuntu-latest
     steps:
-      - name: Stop staging when it has been running long enough
+      - name: Stop staging when it has been idle long enough
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: eu-central-1
           ID: ${{ secrets.STAGING_INSTANCE_ID }}
+          HOST: ${{ secrets.STAGING_EC2_HOST }}
+          SSH_KEY: ${{ secrets.STAGING_EC2_KEY }}
           STOP_NOW: ${{ inputs.now }}
         run: |
           read -r STATE LAUNCH <<< "$(aws ec2 describe-instances --instance-ids "$ID" \
             --query 'Reservations[0].Instances[0].[State.Name,LaunchTime]' --output text)"
           echo "state=$STATE launched=$LAUNCH"
           [ "$STATE" = "running" ] || { echo "Not running, nothing to do."; exit 0; }
-          age=$(( $(date +%s) - $(date -d "$LAUNCH" +%s) ))
-          echo "running for $(( age / 60 )) minutes (limit $(( MAX_HOURS * 60 )))"
+
+          # last time something used staging: the newer of "server started" and the marker file
+          KEY_FILE="$(mktemp)"; printf '%s\n' "$SSH_KEY" > "$KEY_FILE"; chmod 600 "$KEY_FILE"
+          LAST="$(ssh -i "$KEY_FILE" -o StrictHostKeyChecking=no -o ConnectTimeout=15 "ubuntu@$HOST" \
+            'stat -c %Y ~/deploy/last-activity 2>/dev/null' 2>/dev/null || true)"
+          rm -f "$KEY_FILE"
+          launch=$(date -d "$LAUNCH" +%s); last="${LAST:-0}"
+          ref=$(( launch > last ? launch : last ))
+          age=$(( $(date +%s) - ref ))
+          echo "idle for $(( age / 60 )) minutes (limit $(( MAX_HOURS * 60 )))"
+
           if [ "$STOP_NOW" = "true" ] || [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
             aws ec2 stop-instances --instance-ids "$ID"
             echo "Stopped."

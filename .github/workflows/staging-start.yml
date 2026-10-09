@@ -23,3 +23,10 @@ jobs:
             sleep 5
           done
           echo "SSH did not come up"; exit 1
+      - name: Mark staging as in use (restarts the 2-hour countdown of the auto-stop)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.STAGING_EC2_KEY }}
+          script: mkdir -p ~/deploy && touch ~/deploy/last-activity
