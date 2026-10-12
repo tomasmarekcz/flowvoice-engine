@@ -18,12 +18,12 @@ describe("logger", () => {
   it("outputs valid JSON in production", async () => {
     process.env.NODE_ENV = "production";
     const { logger } = await import("../src/logger");
-    logger.info("test message", { key: "value" });
+    logger.info("test message", { detail: "value" });
     const output = (consoleSpy.mock.calls[0]?.[0] as string) ?? "";
     const parsed = JSON.parse(output.trim());
     expect(parsed.level).toBe("info");
     expect(parsed.message).toBe("test message");
-    expect(parsed.key).toBe("value");
+    expect(parsed.detail).toBe("value");
     expect(typeof parsed.ts).toBe("string");
   });
 
@@ -38,13 +38,13 @@ describe("logger", () => {
     expect(parsed.error).toBe("something broke");
   });
 
-  it("truncates strings longer than 200 chars", async () => {
+  it("truncates strings longer than 2000 chars", async () => {
     process.env.NODE_ENV = "production";
     const { logger } = await import("../src/logger");
-    logger.info("msg", { big: "x".repeat(300) });
+    logger.info("msg", { big: "x".repeat(3000) });
     const output = (consoleSpy.mock.calls[0]?.[0] as string) ?? "";
     const parsed = JSON.parse(output.trim());
-    expect((parsed.big as string).length).toBeLessThanOrEqual(203);
+    expect((parsed.big as string).length).toBeLessThanOrEqual(2020);
   });
 
   it("does not log debug in production", async () => {
