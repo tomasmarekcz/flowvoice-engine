@@ -1,5 +1,6 @@
 import { getSupabaseUrl, getSupabaseHeaders } from "./config";
 import { logger } from "./logger";
+import { setLogContext } from "./log/context";
 
 export interface TranscriptEntry {
   role: "user" | "assistant";
@@ -94,7 +95,10 @@ export class CallLogger {
       });
       const rows = (await res.json()) as Array<{ id: string }>;
       this.callId = rows?.[0]?.id ?? null;
-      if (this.callId) logger.info("call created", { call_id: this.callId });
+      if (this.callId) {
+        setLogContext({ call_id: this.callId });
+        logger.info("call created", { event: "call.created", call_id: this.callId });
+      }
       else logger.warn("createCall returned no id", { rows: JSON.stringify(rows) });
     } catch (e) {
       logger.error("createCall error", { err: e });
@@ -230,7 +234,7 @@ export class CallLogger {
           search_embedding_tokens:      tokenUsage.searchEmbedding,
         }),
       });
-      logger.info("call finalized", { call_id: this.callId, duration_seconds, turns: this.transcript.length });
+      logger.info("call finalized", { event: "call.finalized", call_id: this.callId, duration_seconds, turns: this.transcript.length });
     } catch (e) {
       logger.error("finalizeCall error", { err: e });
     }

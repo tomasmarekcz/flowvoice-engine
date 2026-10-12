@@ -2,6 +2,7 @@ import { WebSocket } from "ws";
 import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import { loadAssistantSettings, AssistantSettings } from "./config";
 import { logger } from "./logger";
+import { bindToCurrentContext } from "./log/context";
 import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
@@ -92,8 +93,9 @@ export class CallSession implements VoiceSession {
     });
     this.openaiWs = openaiWs;
 
-    openaiWs.on("open", () => {
-      logger.info("OpenAI connected, sending session.update");
+    // WebSocket callbacks do not inherit async context: bind each to the call's log context.
+    openaiWs.on("open", bindToCurrentContext(() => {
+      logger.info("OpenAI connected, sending session.update", { event: "openai.connected" });
       openaiWs.send(JSON.stringify({
         type: "session.update",
         session: {
@@ -121,25 +123,25 @@ export class CallSession implements VoiceSession {
         calendar_project_id: this.calendarProjectId,
         call_id: this.logger.callId,
       });
-    });
+    }));
 
-    openaiWs.on("message", (data) => {
+    openaiWs.on("message", bindToCurrentContext((data) => {
       this.handleOpenAIMessage(data.toString()).catch((e) =>
         logger.error("handleOpenAIMessage error", { err: e })
       );
-    });
+    }));
 
-    openaiWs.on("close", (code) => {
-      logger.warn("OpenAI disconnected", { code });
+    openaiWs.on("close", bindToCurrentContext((code) => {
+      logger.warn("OpenAI disconnected", { event: "openai.closed", code });
       if (!this.ended) {
         this.callbacks.sendJson({ type: "error", message: `OpenAI disconnected (code ${code})` });
       }
-    });
+    }));
 
-    openaiWs.on("error", (e) => {
-      logger.error("OpenAI WS error", { err: e });
+    openaiWs.on("error", bindToCurrentContext((e) => {
+      logger.error("OpenAI WS error", { event: "openai.ws_error", err: e });
       this.callbacks.sendJson({ type: "error", message: `OpenAI error: ${e.message}` });
-    });
+    }));
   }
 
   handleClientAudio(pcm24Base64: string): void {
@@ -170,7 +172,7 @@ export class CallSession implements VoiceSession {
   async end(): Promise<void> {
     if (this.ended) return;
     this.ended = true;
-    logger.info("session ending, generating summary");
+    logger.info("session ending, generating summary", { event: "call.ending" });
     if (this.openaiWs?.readyState === WebSocket.OPEN) this.openaiWs.close();
     const apiKey = process.env.OPENAI_API_KEY ?? "";
 
@@ -257,7 +259,7 @@ export class CallSession implements VoiceSession {
     const type = msg["type"] as string;
 
     if (type === "error") {
-      logger.error("OpenAI error event", { detail: JSON.stringify(msg) });
+      logger.error("OpenAI error event", { event: "openai.error_event", detail: JSON.stringify(msg) });
     } else if (type !== "response.output_audio.delta") {
       logger.debug("← openai event", { type });
     }
@@ -272,6 +274,15 @@ export class CallSession implements VoiceSession {
         this.usageAccum.realtimeAudioOut += outDet?.["audio_tokens"] ?? 0;
         this.usageAccum.realtimeTextIn   += inDet?.["text_tokens"]   ?? 0;
         this.usageAccum.realtimeTextOut  += outDet?.["text_tokens"]  ?? 0;
+        logger.info("openai response done", {
+          event: "openai.response_done",
+          usage_tokens: {
+            audio_in: inDet?.["audio_tokens"] ?? 0,
+            audio_out: outDet?.["audio_tokens"] ?? 0,
+            text_in: inDet?.["text_tokens"] ?? 0,
+            text_out: outDet?.["text_tokens"] ?? 0,
+          },
+        });
       }
     }
 

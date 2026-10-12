@@ -9,6 +9,19 @@ function internalHeaders(): Record<string, string> {
   return { "X-Internal-Secret": process.env.ENGINE_INTERNAL_SECRET ?? "" };
 }
 
+// Only these arguments are written to the logs: free text such as names, phones and notes stays out.
+const ARG_WHITELIST = ["from_date", "from_time", "duration_minutes", "service_id", "resource_id", "start_time", "end_time", "days", "slot_id"];
+
+function loggableArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of ARG_WHITELIST) if (args[key] !== undefined) out[key] = args[key];
+  return out;
+}
+
+function resultHasError(result: unknown): boolean {
+  return typeof result === "object" && result !== null && "error" in result;
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
@@ -127,10 +140,16 @@ export async function executeTool(
       return { result: { error: `Unknown tool: ${name}` }, embeddingTokens: 0 };
     }
 
-    logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
+    logger.info("tool executed", {
+      event: "tool.exec",
+      tool: name,
+      duration_ms: Date.now() - t0,
+      result_error: resultHasError(result),
+      args: loggableArgs(args),
+    });
     return { result, embeddingTokens };
   } catch (e) {
-    logger.error("tool execution error", { name, duration_ms: Date.now() - t0, err: e });
+    logger.error("tool execution error", { event: "tool.exec", tool: name, duration_ms: Date.now() - t0, args: loggableArgs(args), err: e });
     return { result: { error: String(e) }, embeddingTokens: 0 };
   }
 }

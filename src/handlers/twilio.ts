@@ -3,7 +3,9 @@ import { IncomingMessage } from "http";
 import type { Request, Response } from "express";
 import { startCallSession } from "../session-factory";
 import type { AudioFormat, VoiceSession } from "../session-types";
+import { randomUUID } from "node:crypto";
 import { logger } from "../logger";
+import { createLogContext } from "../log/context";
 import { twilioAudioToOpenAI, openAIAudioToTwilio } from "../audio";
 import { getSupabaseUrl, getSupabaseHeaders, loadAssistantSettings } from "../config";
 import { checkCallEligibility } from "../billing";
@@ -90,11 +92,11 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
   const callerPhone = sipMatch ? sipMatch[1] : rawFrom;
   const callSid = body["CallSid"] ?? "";
 
-  logger.info("twilio voice webhook", { project_id: projectId, caller: callerPhone, call_sid: callSid });
+  logger.info("twilio voice webhook", { event: "twilio.webhook.received", project_id: projectId, caller: callerPhone, call_sid: callSid });
 
   const eligibility = await checkCallEligibility(projectId);
   if (!eligibility.allowed) {
-    logger.info("call rejected by billing eligibility", { project_id: projectId, reason: eligibility.reason });
+    logger.info("call rejected by billing eligibility", { event: "call.rejected", project_id: projectId, reason: eligibility.reason });
     res.type("text/xml").send(buildDeclineTwiml());
     return;
   }
@@ -117,7 +119,7 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
       isRecipientAllowed("phone", normalizePhone(settings?.owner_phone)),
   });
 
-  logger.info("call routing decision", { project_id: projectId, is_active: settings?.is_active ?? true, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });
+  logger.info("call routing decision", { event: "call.routing", project_id: projectId, is_active: settings?.is_active ?? true, answer_mode: settings?.answer_mode ?? "missed_calls", routing: routing.kind });
 
   if (routing.kind === "declined") {
     // <Reject> never answers the call, so nothing is said and no call is connected.
@@ -267,9 +269,11 @@ export async function handleTwilioConnection(
   let streamSid: string | null = null;
   let session: VoiceSession | null = null;
 
-  logger.info("Twilio Media Stream connected");
+  // WebSocket callbacks do not inherit async context, so every listener below is bound to this one.
+  const logCtx = createLogContext({ request_id: randomUUID() });
+  logCtx.run(() => logger.info("Twilio Media Stream connected", { event: "twilio.ws_connected" }));
 
-  ws.on("message", async (data) => {
+  ws.on("message", logCtx.bind(async (data) => {
     let msg: Record<string, unknown>;
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
@@ -282,6 +286,7 @@ export async function handleTwilioConnection(
       const projectId = customParams["project_id"] ?? null;
       const callerPhone = customParams["caller_phone"] || null;
       const callSid = customParams["call_sid"] || null;
+      logCtx.set({ project_id: projectId, call_sid: callSid });
 
       logger.info("Twilio stream started", { stream_sid: streamSid, project_id: projectId ?? "none", call_sid: callSid ?? "none" });
 
@@ -347,16 +352,16 @@ export async function handleTwilioConnection(
       ws.close();
       return;
     }
-  });
+  }));
 
-  ws.on("close", () => {
-    logger.info("Twilio WS closed");
+  ws.on("close", logCtx.bind(() => {
+    logger.info("Twilio WS closed", { event: "twilio.ws_closed" });
     if (session) {
       session.end().catch((e) =>
         logger.error("session.end on close error", { err: e })
       );
     }
-  });
+  }));
 
-  ws.on("error", (e) => logger.error("Twilio WS error", { err: e }));
+  ws.on("error", logCtx.bind((e: Error) => logger.error("Twilio WS error", { event: "twilio.ws_error", err: e })));
 }

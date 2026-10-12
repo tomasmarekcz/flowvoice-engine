@@ -2,6 +2,7 @@ import { WebSocket } from "ws";
 import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import type { AssistantSettings } from "./config";
 import { logger } from "./logger";
+import { bindToCurrentContext } from "./log/context";
 import {
   LIVE_ENDPOINT,
   TranscriptAccumulator,
@@ -97,22 +98,23 @@ export class LiveCallSession implements VoiceSession {
       START_TIMEOUT_MS
     );
 
-    ws.on("open", () => ws.send(JSON.stringify(message)));
-    ws.on("message", (data) => {
+    // WebSocket callbacks do not inherit async context: bind each to the call's log context.
+    ws.on("open", bindToCurrentContext(() => ws.send(JSON.stringify(message))));
+    ws.on("message", bindToCurrentContext((data) => {
       this.handleMessage(data.toString()).catch((e) => logger.error("handleMessage error", { err: e }));
-    });
-    ws.on("close", (code: number) => {
+    }));
+    ws.on("close", bindToCurrentContext((code: number) => {
       this.failStart?.(new Error(`OpenAI Live closed before start (code ${code})`));
-      logger.warn("OpenAI Live disconnected", { code });
+      logger.warn("OpenAI Live disconnected", { event: "openai.closed", code });
       if (!this.ended) {
         this.callbacks.sendJson({ type: "error", message: `OpenAI Live disconnected (code ${code})` });
       }
-    });
-    ws.on("error", (e: Error) => {
+    }));
+    ws.on("error", bindToCurrentContext((e: Error) => {
       this.failStart?.(e);
-      logger.error("OpenAI Live WS error", { err: e });
+      logger.error("OpenAI Live WS error", { event: "openai.ws_error", err: e });
       this.callbacks.sendJson({ type: "error", message: `OpenAI Live error: ${e.message}` });
-    });
+    }));
 
     try {
       await ready;
@@ -120,7 +122,7 @@ export class LiveCallSession implements VoiceSession {
       clearTimeout(timeout);
     }
 
-    logger.info("OpenAI Live session ready", { ms_since_connect: Date.now() - connectStartedAt });
+    logger.info("OpenAI Live session ready", { event: "openai.connected", ms_since_connect: Date.now() - connectStartedAt });
     // Greet first: the model only speaks while input audio is flowing, and every
     // millisecond spent on the database write below is silence for the caller.
     this.sendGreeting();

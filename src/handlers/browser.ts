@@ -2,7 +2,9 @@ import { WebSocket as WS } from "ws";
 import { IncomingMessage } from "http";
 import { URL } from "url";
 import { CallSession } from "../session";
+import { randomUUID } from "node:crypto";
 import { logger } from "../logger";
+import { createLogContext } from "../log/context";
 import { checkCallEligibility } from "../billing";
 
 export async function handleBrowserConnection(
@@ -11,7 +13,9 @@ export async function handleBrowserConnection(
 ): Promise<void> {
   const params = new URL(request.url ?? "", "http://localhost").searchParams;
   const projectId = params.get("project_id");
-  logger.info("browser client connected", { project_id: projectId ?? "none" });
+  // WebSocket callbacks do not inherit async context, so every listener below is bound to this one.
+  const logCtx = createLogContext({ request_id: randomUUID(), project_id: projectId });
+  logCtx.run(() => logger.info("browser client connected", { event: "browser.ws_connected", project_id: projectId ?? "none" }));
 
   if (projectId) {
     const eligibility = await checkCallEligibility(projectId);
@@ -41,14 +45,14 @@ export async function handleBrowserConnection(
   });
 
   try {
-    await session.start();
+    await logCtx.run(() => session.start());
   } catch (e) {
     ws.send(JSON.stringify({ type: "error", message: (e as Error).message }));
     ws.close();
     return;
   }
 
-  ws.on("message", (data) => {
+  ws.on("message", logCtx.bind((data) => {
     let msg: Record<string, unknown>;
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
@@ -57,12 +61,12 @@ export async function handleBrowserConnection(
     } else {
       session.handleClientEvent(msg);
     }
-  });
+  }));
 
-  ws.on("close", () => {
-    logger.info("browser client disconnected");
+  ws.on("close", logCtx.bind(() => {
+    logger.info("browser client disconnected", { event: "browser.ws_closed" });
     session.end().catch((e) => logger.error("session.end error", { err: e }));
-  });
+  }));
 
-  ws.on("error", (e) => logger.error("browser WS error", { err: e }));
+  ws.on("error", logCtx.bind((e: Error) => logger.error("browser WS error", { event: "browser.ws_error", err: e })));
 }

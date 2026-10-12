@@ -5,8 +5,15 @@ import { handleTwilioVoiceWebhook, handleRecordingStatusCallback, handleDialStat
 import { handleBrowserConnection } from "./handlers/browser";
 import { logger } from "./logger";
 import { assertEnvironmentSafe } from "./environment";
+import { installFetchLogging } from "./log/fetch-logging";
+import { inLogContext } from "./log-http";
 
 assertEnvironmentSafe(); // throws (process exits) if the environment label and the database disagree
+
+installFetchLogging(logger);
+process.on("uncaughtExceptionMonitor", (err) => {
+  logger.error("uncaught exception", { event: "system.uncaught", err });
+});
 
 const app = express();
 app.use(express.json());
@@ -16,10 +23,10 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/twilio/voice", handleTwilioVoiceWebhook);
-app.post("/twilio/voice/dial-status", handleDialStatusCallback);
-app.post("/twilio/recording-status", handleRecordingStatusCallback);
-app.post("/twilio/sms-status", handleSmsStatusCallback);
+app.post("/twilio/voice", inLogContext(handleTwilioVoiceWebhook));
+app.post("/twilio/voice/dial-status", inLogContext(handleDialStatusCallback));
+app.post("/twilio/recording-status", inLogContext(handleRecordingStatusCallback));
+app.post("/twilio/sms-status", inLogContext(handleSmsStatusCallback));
 
 const server = http.createServer(app);
 
@@ -49,7 +56,7 @@ server.on("upgrade", (request, socket, head) => {
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
 
 server.listen(PORT, () => {
-  logger.info("engine listening", { port: PORT });
+  logger.info("engine listening", { port: PORT, event: "system.start" });
 });
 
 export { app, server };
