@@ -6,6 +6,7 @@ import { bindToCurrentContext } from "./log/context";
 import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
+import { isFirstTestCall, isTestCall, notificationPlan } from "./test-call";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
 export function formatOwnerSms(
@@ -179,13 +180,17 @@ export class CallSession implements VoiceSession {
     const skipSms = shouldSkipCallSms(this.logger.callDurationSeconds, this.logger.transcript);
     if (skipSms) logger.info("skipping SMS: short call or caller said nothing", { seconds: this.logger.callDurationSeconds });
 
+    const testCall = isTestCall(this.callerPhone, this.twilioCallSid);
+    const plan = notificationPlan(testCall, testCall && !skipSms ? await isFirstTestCall(this.projectId, this.logger.callId) : false);
+    if (testCall) logger.info("test call notifications", { send: plan.send, force_generate: plan.forceGenerate });
+
     const smsOptions: SmsOptions | undefined = this.settings
       ? {
-          smsOwnerEnabled: !skipSms && (this.settings.sms_owner_enabled ?? false),
+          smsOwnerEnabled: !skipSms && (plan.forceGenerate || (this.settings.sms_owner_enabled ?? false)),
           smsCallerEnabled: !skipSms && (this.settings.sms_caller_enabled ?? false),
           smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
           smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
-          emailOwnerEnabled: this.settings.email_owner_enabled ?? false,
+          emailOwnerEnabled: !skipSms && (plan.forceGenerate || (this.settings.email_owner_enabled ?? false)),
         }
       : undefined;
 
@@ -216,9 +221,9 @@ export class CallSession implements VoiceSession {
       : null;
 
     const { ownerSent, callerSent, ownerSid, callerSid } = await sendSmsNotifications({
-      ownerSms: ownerSmsFinal,
+      ownerSms: plan.send ? ownerSmsFinal : null,
       ownerPhone: this.settings?.owner_phone ?? null,
-      callerSms,
+      callerSms: plan.send ? callerSms : null,
       callerPhone: this.callerPhone,
     });
 
@@ -235,7 +240,7 @@ export class CallSession implements VoiceSession {
     await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
 
     // Send email notification if enabled
-    if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {
+    if (plan.send && (plan.forceGenerate || this.settings?.email_owner_enabled) && emailOwner && this.logger.callId) {
       const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
       fetch(`${base}/api/notify/call`, {
         method: "POST",
@@ -247,6 +252,7 @@ export class CallSession implements VoiceSession {
           caller_phone: this.callerPhone,
           ai_title: title,
           duration_seconds: this.logger.callDurationSeconds,
+          first_test_call: testCall && plan.send,
         }),
       }).catch((e) => logger.error("notify/call error", { err: e }));
     }
