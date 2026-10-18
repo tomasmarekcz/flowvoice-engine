@@ -108,11 +108,13 @@ export class CallSession implements VoiceSession {
             input: {
               format: { type: "audio/pcm", rate: 24000 },
               transcription: { model: "gpt-4o-transcribe" },
+              // Filters background noise (a TV, the street) before it can count as speech and cut the assistant off.
+              noise_reduction: { type: "near_field" },
               turn_detection: {
                 type: "server_vad",
                 threshold: 0.8,
                 prefix_padding_ms: 300,
-                silence_duration_ms: 800,
+                silence_duration_ms: 400,
               },
             },
             output: { format: { type: "audio/pcm", rate: 24000 }, voice },
@@ -180,7 +182,7 @@ export class CallSession implements VoiceSession {
     const skipSms = shouldSkipCallSms(this.logger.callDurationSeconds, this.logger.transcript);
     if (skipSms) logger.info("skipping SMS: short call or caller said nothing", { seconds: this.logger.callDurationSeconds });
 
-    const testCall = isTestCall(this.callerPhone, this.twilioCallSid);
+    const testCall = isTestCall(this.twilioCallSid);
     const plan = notificationPlan(testCall, testCall && !skipSms ? await isFirstTestCall(this.projectId, this.logger.callId) : false);
     if (testCall) logger.info("test call notifications", { send: plan.send, force_generate: plan.forceGenerate });
 
@@ -223,7 +225,8 @@ export class CallSession implements VoiceSession {
     const { ownerSent, callerSent, ownerSid, callerSid } = await sendSmsNotifications({
       ownerSms: plan.send ? ownerSmsFinal : null,
       ownerPhone: this.settings?.owner_phone ?? null,
-      callerSms: plan.send ? callerSms : null,
+      // A test call never texts the number the owner typed: that is their own phone, and nobody asked for the SMS.
+      callerSms: plan.send && !testCall ? callerSms : null,
       callerPhone: this.callerPhone,
     });
 

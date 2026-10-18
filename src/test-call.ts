@@ -1,9 +1,10 @@
 import { getSupabaseHeaders, getSupabaseUrl } from "./config";
 import { logger } from "./logger";
 
-// A test call is the one the owner makes from the dashboard (browser): it has neither a caller number nor a Twilio call.
-export function isTestCall(callerPhone: string | null, twilioCallSid: string | null): boolean {
-  return callerPhone === null && twilioCallSid === null;
+// A test call is the one the owner makes from the dashboard's QR code (browser): it has no Twilio call.
+// It does have a caller number now (the one the owner typed), so the Twilio call is the only mark.
+export function isTestCall(twilioCallSid: string | null): boolean {
+  return twilioCallSid === null;
 }
 
 export interface NotificationPlan {
@@ -25,7 +26,7 @@ export async function isFirstTestCall(projectId: string | null, callId: string |
   if (!projectId || !callId) return false;
   try {
     const res = await fetch(
-      `${getSupabaseUrl()}/rest/v1/calls?project_id=eq.${projectId}&twilio_call_sid=is.null&caller_phone=is.null&id=neq.${callId}&select=id&limit=1`,
+      `${getSupabaseUrl()}/rest/v1/calls?project_id=eq.${projectId}&twilio_call_sid=is.null&id=neq.${callId}&select=id&limit=1`,
       { headers: getSupabaseHeaders() },
     );
     const rows = (await res.json()) as unknown;

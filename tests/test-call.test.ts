@@ -2,10 +2,9 @@ import { describe, it, expect } from "vitest";
 import { isTestCall, notificationPlan } from "../src/test-call";
 
 describe("test calls from the dashboard", () => {
-  it("recognises a browser call (no caller number, no Twilio call)", () => {
-    expect(isTestCall(null, null)).toBe(true);
-    expect(isTestCall("+420777111222", "CA1")).toBe(false);
-    expect(isTestCall(null, "CA1")).toBe(false);
+  it("recognises a call from the QR code by having no Twilio call, even though it has a caller number", () => {
+    expect(isTestCall(null)).toBe(true);
+    expect(isTestCall("CA1")).toBe(false);
   });
 
   it("sends the owner's SMS and email only on the first test call, even when they are still switched off", () => {
