@@ -33,7 +33,7 @@ export interface AssistantSettings {
   _project_description?: string | null;
   _project_website?: string | null;
   _project_language?: string | null;
-  // Joined from event_types table
+  // Joined from services table
   _service_names?: string[];
   // Joined from calendars table (defaults to Europe/Prague when no calendar is set)
   _calendar_timezone?: string;
@@ -101,7 +101,7 @@ export async function loadAssistantSettings(
       const [calRows, etRows] = await Promise.all([
         fetch(`${url}/rest/v1/calendars?id=eq.${settings.calendar_id}&select=project_id,timezone&limit=1`, { headers })
           .then((r) => r.json() as Promise<Array<{ project_id: string; timezone: string | null }>>),
-        fetch(`${url}/rest/v1/event_types?calendar_id=eq.${settings.calendar_id}&is_active=eq.true&select=name&order=name.asc`, { headers })
+        fetch(`${url}/rest/v1/services?project_id=eq.${projectId}&is_active=eq.true&select=name&order=name.asc`, { headers })
           .then((r) => r.json() as Promise<Array<{ name: string }>>),
       ]);
       settings._calendar_project_id = calRows?.[0]?.project_id ?? "admin-test";
