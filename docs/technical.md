@@ -349,14 +349,20 @@ signature validation only).
 
 ## handlers/browser.ts
 
-**Purpose:** WebSocket handler for the dashboard's `test-call` page (an
-internal harness to exercise a call without a real phone call) — same
-`CallSession` wiring as the Twilio handler, but audio is exchanged as raw
+**Purpose:** WebSocket handler for the test call (LEA-84): the owner scans the
+QR code in the dashboard and talks to the assistant from the phone page `/t/<token>`.
+Same `CallSession` wiring as the Twilio handler, but audio is exchanged as raw
 PCM24 JSON messages instead of Twilio's μ-law media-stream format, so no
-`audio.ts` codec conversion is needed here.
+`audio.ts` codec conversion is needed here. It only accepts `?ticket=`, a
+one-time ticket signed by the dashboard with `ENGINE_INTERNAL_SECRET`
+(`test-call-ticket.ts`): project, the phone number the owner typed (used as the
+caller number) and the time limit (300 s) come from the ticket. At most
+`MAX_CONCURRENT_TEST_CALLS` (10) run at once. Test calls are recognised by
+having no Twilio call SID; they never SMS the typed number. The test call always
+uses the standard engine (`CallSession`), never `voice_engine = live`.
 
 **Main exports:** `handleBrowserConnection`.
 
-**Depends on:** `session.ts` (`CallSession`), `logger.ts`.
+**Depends on:** `session.ts` (`CallSession`), `test-call-ticket.ts`, `billing.ts`, `logger.ts`.
 
 **Depended on by:** `index.ts` (registers this as the `/ws/browser` handler).
