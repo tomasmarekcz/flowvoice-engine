@@ -42,7 +42,7 @@ function buildBusinessContext(settings: AssistantSettings | null, callerPhone?: 
   if (settings?._project_industry)    lines.push(`* Business type: ${settings._project_industry}`);
   if (settings?._project_description) lines.push(`* Business description: ${settings._project_description}`);
   if (settings?._project_website)     lines.push(`* Website: ${settings._project_website}`);
-  if (settings?._project_language)    lines.push(`* Default language: ${settings._project_language}`);
+  if (settings?._project_language)    lines.push(`* Default language: ${languageName(settings._project_language)}`);
 
   const services = settings?._service_names ?? [];
   if (services.length > 0) {
@@ -84,6 +84,13 @@ function buildGreetingRule(settings: AssistantSettings | null): string | null {
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────────
+
+// The dashboard stores the language as a code ("cs", "en"); older projects have a word.
+function languageName(value: string): string {
+  if (value === "cs") return "Czech";
+  if (value === "en") return "English";
+  return value;
+}
 
 export function buildPromptFromSettings(
   settings: AssistantSettings | null,
