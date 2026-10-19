@@ -36,3 +36,16 @@ export async function isFirstTestCall(projectId: string | null, callId: string |
     return false;
   }
 }
+
+/** Whether this call is a test and what to do with its notifications; shared by the Standard and Live sessions. */
+export async function planTestCallNotifications(
+  twilioCallSid: string | null,
+  projectId: string | null,
+  callId: string | null,
+  skipSms: boolean,
+): Promise<{ testCall: boolean; plan: NotificationPlan }> {
+  const testCall = isTestCall(twilioCallSid);
+  const plan = notificationPlan(testCall, testCall && !skipSms ? await isFirstTestCall(projectId, callId) : false);
+  if (testCall) logger.info("test call notifications", { send: plan.send, force_generate: plan.forceGenerate });
+  return { testCall, plan };
+}

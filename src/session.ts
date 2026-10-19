@@ -6,7 +6,7 @@ import { bindToCurrentContext } from "./log/context";
 import { buildPromptFromSettings, buildTools } from "./prompt";
 import { executeTool } from "./tools";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
-import { isFirstTestCall, isTestCall, notificationPlan } from "./test-call";
+import { planTestCallNotifications } from "./test-call";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
 export function formatOwnerSms(
@@ -182,9 +182,7 @@ export class CallSession implements VoiceSession {
     const skipSms = shouldSkipCallSms(this.logger.callDurationSeconds, this.logger.transcript);
     if (skipSms) logger.info("skipping SMS: short call or caller said nothing", { seconds: this.logger.callDurationSeconds });
 
-    const testCall = isTestCall(this.twilioCallSid);
-    const plan = notificationPlan(testCall, testCall && !skipSms ? await isFirstTestCall(this.projectId, this.logger.callId) : false);
-    if (testCall) logger.info("test call notifications", { send: plan.send, force_generate: plan.forceGenerate });
+    const { testCall, plan } = await planTestCallNotifications(this.twilioCallSid, this.projectId, this.logger.callId, skipSms);
 
     const smsOptions: SmsOptions | undefined = this.settings
       ? {

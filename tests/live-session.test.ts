@@ -59,19 +59,19 @@ function functionCallEvent(callId: string, name: string, args: Record<string, un
   };
 }
 
-function makeSession(settings: AssistantSettings | null = baseSettings()) {
+function makeSession(settings: AssistantSettings | null = baseSettings(), twilioCallSid: string | null = "CA1") {
   const socket = new FakeSocket();
   const callbacks = { sendAudio: vi.fn(), sendJson: vi.fn(), sendMark: vi.fn(), endCall: vi.fn() };
   const runTool = vi.fn(async () => ({ result: { ok: true }, embeddingTokens: 2 }));
-  const session = new LiveCallSession(settings, "proj-1", "+420111222333", "CA1", callbacks, {
+  const session = new LiveCallSession(settings, "proj-1", "+420111222333", twilioCallSid, callbacks, {
     connect: () => socket as unknown as WebSocket,
     executeTool: runTool,
   });
   return { session, socket, callbacks, runTool };
 }
 
-async function startSession(settings: AssistantSettings | null = baseSettings()) {
-  const parts = makeSession(settings);
+async function startSession(settings: AssistantSettings | null = baseSettings(), twilioCallSid: string | null = "CA1") {
+  const parts = makeSession(settings, twilioCallSid);
   const started = parts.session.start();
   parts.socket.emit("open");
   parts.socket.serverSays({ type: "session.started" });
@@ -332,5 +332,43 @@ describe("LiveCallSession end", () => {
     await session.abort();
     expect(socket.readyState).toBe(3);
     expect(mocks.generateCallSummary).not.toHaveBeenCalled();
+  });
+});
+
+describe("LiveCallSession test call from the QR code", () => {
+  async function finishLongCall(twilioCallSid: string | null) {
+    // The "is this the first test call" check reads the database.
+    process.env.SUPABASE_URL = "https://fake.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-key";
+    vi.useFakeTimers();
+    // The call row is created with id "call-1"; asking for other test calls of the project finds none.
+    vi.mocked(fetch).mockImplementation((async (url: string, init?: { method?: string }) => ({
+      ok: true,
+      json: async () => (init?.method === "POST" && String(url).endsWith("/calls") ? [{ id: "call-1" }] : []),
+    })) as unknown as typeof fetch);
+    mocks.generateCallSummary.mockResolvedValue({
+      title: "T", summary: "S", ownerSms: "owner text", callerSms: "caller text", emailOwner: "mail",
+      summaryInputTokens: 1, summaryOutputTokens: 2,
+    });
+    const { session, socket } = await startSession(baseSettings({ sms_owner_enabled: false, sms_caller_enabled: true, owner_phone: "+420999000111" }), twilioCallSid);
+    socket.serverSays({ type: "session.input_transcript.delta", delta: "I would like a haircut." });
+    vi.advanceTimersByTime(30_000);
+    const ending = session.end();
+    await vi.advanceTimersByTimeAsync(1000); // finishing the call waits a moment before saving
+    await ending;
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    return mocks.sendSmsNotifications.mock.calls[0][0];
+  }
+
+  it("sends the owner's SMS on the first test call even when it is switched off, but never texts the typed number", async () => {
+    const sms = await finishLongCall(null);
+    expect(sms.ownerSms).toContain("owner text");
+    expect(sms.callerSms).toBeNull();
+  });
+
+  it("leaves real calls as they were: the caller's SMS is still sent", async () => {
+    const sms = await finishLongCall("CA777");
+    expect(sms.callerSms).toBe("caller text");
   });
 });

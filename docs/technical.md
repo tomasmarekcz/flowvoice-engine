@@ -356,13 +356,14 @@ PCM24 JSON messages instead of Twilio's μ-law media-stream format, so no
 `audio.ts` codec conversion is needed here. It only accepts `?ticket=`, a
 one-time ticket signed by the dashboard with `ENGINE_INTERNAL_SECRET`
 (`test-call-ticket.ts`): project, the phone number the owner typed (used as the
-caller number) and the time limit (300 s) come from the ticket. At most
+caller number) and the time limit (600 s, with a warning event 60 s before) come from the ticket. At most
 `MAX_CONCURRENT_TEST_CALLS` (10) run at once. Test calls are recognised by
-having no Twilio call SID; they never SMS the typed number. The test call always
-uses the standard engine (`CallSession`), never `voice_engine = live`.
+having no Twilio call SID; they never SMS the typed number. The call runs the same
+engine as a real one (`startCallSession`: Standard or Live); Live speaks 8 kHz
+mu-law, so the browser's 24 kHz audio is converted both ways (`audio.ts`).
 
 **Main exports:** `handleBrowserConnection`.
 
-**Depends on:** `session.ts` (`CallSession`), `test-call-ticket.ts`, `billing.ts`, `logger.ts`.
+**Depends on:** `session-factory.ts`, `audio.ts`, `test-call-ticket.ts`, `billing.ts`, `logger.ts`.
 
 **Depended on by:** `index.ts` (registers this as the `/ws/browser` handler).

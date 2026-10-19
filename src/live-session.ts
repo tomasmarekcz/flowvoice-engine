@@ -14,6 +14,7 @@ import {
 import { formatOwnerSms } from "./session";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
+import { planTestCallNotifications } from "./test-call";
 import { executeTool as defaultExecuteTool } from "./tools";
 
 const START_TIMEOUT_MS = 4000;
@@ -66,11 +67,11 @@ export class LiveCallSession implements VoiceSession {
     private readonly settings: AssistantSettings | null,
     private readonly projectId: string | null,
     private readonly callerPhone: string | null,
-    twilioCallSid: string | null,
+    private readonly twilioCallSid: string | null,
     private readonly callbacks: SessionCallbacks,
     deps: LiveSessionDeps = {}
   ) {
-    this.logger = new CallLogger(projectId, twilioCallSid);
+    this.logger = new CallLogger(projectId, this.twilioCallSid);
     this.logger.transcript = this.transcript.entries;
     this.connect = deps.connect ?? defaultConnect;
     this.runTool = deps.executeTool ?? defaultExecuteTool;
@@ -327,13 +328,17 @@ export class LiveCallSession implements VoiceSession {
     const skipSms = shouldSkipCallSms(this.logger.callDurationSeconds, this.logger.transcript);
     if (skipSms) logger.info("skipping SMS: short call or caller said nothing", { seconds: this.logger.callDurationSeconds });
 
+    // A test call from the QR code: the first one really sends the owner's SMS and e-mail, later ones only write them
+    // into the call detail (same rules as the Standard session).
+    const { testCall, plan } = await planTestCallNotifications(this.twilioCallSid, this.projectId, this.logger.callId, skipSms);
+
     const smsOptions: SmsOptions | undefined = this.settings
       ? {
-          smsOwnerEnabled: !skipSms && (this.settings.sms_owner_enabled ?? false),
+          smsOwnerEnabled: !skipSms && (plan.forceGenerate || (this.settings.sms_owner_enabled ?? false)),
           smsCallerEnabled: !skipSms && (this.settings.sms_caller_enabled ?? false),
           smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
           smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
-          emailOwnerEnabled: this.settings.email_owner_enabled ?? false,
+          emailOwnerEnabled: plan.forceGenerate || (this.settings.email_owner_enabled ?? false),
         }
       : undefined;
 
@@ -364,9 +369,10 @@ export class LiveCallSession implements VoiceSession {
       : null;
 
     const { ownerSent, callerSent, ownerSid, callerSid } = await sendSmsNotifications({
-      ownerSms: ownerSmsFinal,
+      ownerSms: plan.send ? ownerSmsFinal : null,
       ownerPhone: this.settings?.owner_phone ?? null,
-      callerSms,
+      // A test call never texts the number the owner typed: that is their own phone, and nobody asked for the SMS.
+      callerSms: plan.send && !testCall ? callerSms : null,
       callerPhone: this.callerPhone,
     });
 
@@ -379,7 +385,7 @@ export class LiveCallSession implements VoiceSession {
 
     await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
 
-    if (this.settings?.email_owner_enabled && emailOwner && this.logger.callId) {
+    if (plan.send && (plan.forceGenerate || this.settings?.email_owner_enabled) && emailOwner && this.logger.callId) {
       const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
       fetch(`${base}/api/notify/call`, {
         method: "POST",
@@ -391,6 +397,7 @@ export class LiveCallSession implements VoiceSession {
           caller_phone: this.callerPhone,
           ai_title: title,
           duration_seconds: this.logger.callDurationSeconds,
+          first_test_call: testCall && plan.send,
         }),
       }).catch((e) => logger.error("notify/call error", { err: e }));
     }

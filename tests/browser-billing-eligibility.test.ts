@@ -9,11 +9,14 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-key";
 process.env.ENGINE_INTERNAL_SECRET = "engine-secret";
 
 const mockStart = vi.fn().mockResolvedValue(undefined);
-vi.mock("../src/session", () => ({
-  CallSession: vi.fn().mockImplementation(() => ({ start: mockStart })),
+vi.mock("../src/session-factory", () => ({
+  startCallSession: vi.fn(async () => {
+    await mockStart();
+    return { audioFormat: "pcm24", handleClientAudio: vi.fn(), handleTwilioMark: vi.fn(), end: vi.fn().mockResolvedValue(undefined) };
+  }),
 }));
 
-const { CallSession } = await import("../src/session");
+const { startCallSession } = await import("../src/session-factory");
 const { handleBrowserConnection } = await import("../src/handlers/browser");
 
 function makeWsAndRequest(url: string) {
@@ -61,7 +64,7 @@ describe("handleBrowserConnection billing eligibility", () => {
 
     await handleBrowserConnection(ws, request);
 
-    expect(vi.mocked(CallSession).mock.calls.at(-1)?.slice(0, 3)).toEqual(["proj-9", "+4915112345678", null]);
+    expect(vi.mocked(startCallSession).mock.calls.at(-1)?.slice(0, 3)).toEqual(["proj-9", "+4915112345678", null]);
   });
 
   it("refuses a connection without a valid ticket, and the old project_id link no longer works", async () => {

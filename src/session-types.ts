@@ -14,5 +14,7 @@ export interface VoiceSession {
   start(): Promise<void>;
   handleClientAudio(audio: string): void;
   handleTwilioMark(name: string): void;
+  // Other client messages (browser test call only); the Live session has none.
+  handleClientEvent?(msg: Record<string, unknown>): void;
   end(): Promise<void>;
 }
