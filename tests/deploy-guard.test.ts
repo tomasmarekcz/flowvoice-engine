@@ -110,6 +110,16 @@ describe("deploy/guard.sh", () => {
     expect((await run(0, 0, { dashboardUrl: "http://127.0.0.1:9" })).code).toBe(0);
   });
 
+  it("stops, not continues, when an answer cannot be read (unknown must never look like free)", async () => {
+    const garbage = http.createServer((_req, res) => { res.writeHead(200); res.end("<html>not json</html>"); });
+    await new Promise<void>((r) => garbage.listen(0, "127.0.0.1", () => r()));
+    const garbagePort = (garbage.address() as { port: number }).port;
+    const r = await run(0, 0, { dashboardUrl: `http://127.0.0.1:${garbagePort}` });
+    garbage.close();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("nelze přečíst");
+  });
+
   it("continues with a warning when neither side can report (an older version), so the first release is possible", async () => {
     dashboard = { status: 404, body: {} };
     engine = { status: 404, body: {} };

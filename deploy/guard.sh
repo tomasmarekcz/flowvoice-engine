@@ -31,10 +31,22 @@ check_activity() {
   ACTIVITY_BLOCKING=0
   ACTIVITY_SUMMARY=""
 
+  command -v python3 >/dev/null 2>&1 || {
+    # Without it the answers cannot be read; "unknown" must never look like "free".
+    ACTIVITY_BLOCKING=1
+    ACTIVITY_SUMMARY="kontrolu nelze provést (na serveru chybí python3); použij vynucení, jen když víš, že nikdo nevolá"
+    return
+  }
+
   # 1) The dashboard sums up everything (engine + database).
   { read -r code; body="$(cat)"; } < <(_get "$ACTIVITY_DASHBOARD_URL/api/internal/activity" "$secret")
   if [[ "$code" == "200" ]]; then
-    ACTIVITY_BLOCKING="$(printf '%s' "$body" | python3 -c 'import sys,json; print(1 if json.load(sys.stdin).get("blocking") else 0)' 2>/dev/null || echo 0)"
+    ACTIVITY_BLOCKING="$(printf '%s' "$body" | python3 -c 'import sys,json; print(1 if json.load(sys.stdin).get("blocking") else 0)' 2>/dev/null)" || ACTIVITY_BLOCKING=""
+    if [[ "$ACTIVITY_BLOCKING" != "0" && "$ACTIVITY_BLOCKING" != "1" ]]; then
+      ACTIVITY_BLOCKING=1
+      ACTIVITY_SUMMARY="odpověď dashboardu nelze přečíst"
+      return
+    fi
     ACTIVITY_SUMMARY="$(printf '%s' "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("summary",""))' 2>/dev/null)"
     return
   fi
@@ -43,7 +55,8 @@ check_activity() {
   { read -r code; body="$(cat)"; } < <(_get "$ACTIVITY_ENGINE_URL/internal/active-calls" "$secret")
   if [[ "$code" == "200" ]]; then
     local n
-    n="$(printf '%s' "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("active",0))' 2>/dev/null || echo 0)"
+    n="$(printf '%s' "$body" | python3 -c 'import sys,json; print(int(json.load(sys.stdin).get("active",0)))' 2>/dev/null)" || n=""
+    if [[ ! "$n" =~ ^[0-9]+$ ]]; then ACTIVITY_BLOCKING=1; ACTIVITY_SUMMARY="odpověď enginu nelze přečíst"; return; fi
     if [[ "$n" -gt 0 ]]; then ACTIVITY_BLOCKING=1; ACTIVITY_SUMMARY="běží $n hovorů (jen engine, dashboard neodpovídá)"; fi
     return
   fi
