@@ -2,12 +2,32 @@
 # Runs ON the server. Usage:
 #   deploy-engine.sh <sha> <image.tar.gz>   load + start a new engine version
 #   deploy-engine.sh --rollback             go back to the previous version
+#   deploy-engine.sh --prepare <sha> <image.tar.gz>   only load the image (nothing is restarted)
+#   deploy-engine.sh --activate <sha>                 start an already loaded version
+# Options (any position): --wait-minutes N (wait for running calls, checking every minute), --force
+# (deploy even while something runs). Without them the deploy refuses to run while a call is in progress (LEA-80).
 set -euo pipefail
 
 STATE_DIR="$HOME/deploy"
 ENV_FILE="$HOME/flowvoice-engine/.env"
 IMAGE="flowvoice-engine"
 mkdir -p "$STATE_DIR"
+source "$STATE_DIR/guard.sh"
+
+# --- options ---
+WAIT_MINUTES=0; FORCE=0; MODE="all"; POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --wait-minutes) WAIT_MINUTES="${2:?--wait-minutes needs a number}"; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    --prepare) MODE="prepare"; shift ;;
+    --activate) MODE="activate"; shift ;;
+    --rollback) MODE="rollback"; shift ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+[[ "$WAIT_MINUTES" =~ ^[0-9]+$ ]] || { echo "--wait-minutes must be a whole number"; exit 1; }
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 health_ok() {
   for _ in $(seq 1 30); do
@@ -24,7 +44,8 @@ run_container() {
   docker run -d --restart=always --env-file "$ENV_FILE" --network host --name engine "$IMAGE:$tag" >/dev/null
 }
 
-if [[ "${1:-}" == "--rollback" ]]; then
+if [[ "$MODE" == "rollback" ]]; then
+  wait_for_idle "$WAIT_MINUTES" "$FORCE" || exit 1
   prev="$(cat "$STATE_DIR/engine.previous" 2>/dev/null || true)"
   [[ -n "$prev" ]] || { echo "No previous version recorded"; exit 1; }
   run_container "$prev"
@@ -34,13 +55,21 @@ if [[ "${1:-}" == "--rollback" ]]; then
   exit 0
 fi
 
-sha="${1:?usage: deploy-engine.sh <sha> <image.tar.gz>}"
-tarball="${2:?usage: deploy-engine.sh <sha> <image.tar.gz>}"
+sha="${1:?usage: deploy-engine.sh <sha> [<image.tar.gz>]}"
 
-# The image is tagged flowvoice-engine:<sha> when it is built in CI.
-gunzip -c "$tarball" | docker load
+if [[ "$MODE" != "activate" ]]; then
+  tarball="${2:?usage: deploy-engine.sh <sha> <image.tar.gz>}"
+  # The image is tagged flowvoice-engine:<sha> when it is built in CI.
+  gunzip -c "$tarball" | docker load
+  [[ "$MODE" == "prepare" ]] && { echo "Image $sha loaded, not started"; exit 0; }
+else
+  docker image inspect "$IMAGE:$sha" >/dev/null 2>&1 || { echo "Image $sha is not loaded; run --prepare first"; exit 1; }
+fi
 
 current="$(cat "$STATE_DIR/engine.current" 2>/dev/null || true)"
+
+# Last look right before the swap: nothing may be running (LEA-80).
+wait_for_idle "$WAIT_MINUTES" "$FORCE" || exit 1
 
 run_container "$sha"
 if health_ok; then

@@ -57,15 +57,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: engine-image-${{ github.sha }}
-      - name: Put the deploy script next to the image
-        run: cp deploy/deploy-engine.sh deploy-engine.sh
-      - name: Copy image and script to staging
+      - name: Put the deploy scripts next to the image
+        run: cp deploy/deploy-engine.sh deploy-engine.sh && cp deploy/guard.sh guard.sh
+      - name: Copy image and scripts to staging
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.STAGING_EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.STAGING_EC2_KEY }}
-          source: "engine-${{ github.sha }}.tar.gz,deploy-engine.sh"
+          source: "engine-${{ github.sha }}.tar.gz,deploy-engine.sh,guard.sh"
           target: "~/deploy/"
       - name: Deploy on staging
         uses: appleboy/ssh-action@v1.2.0
@@ -75,7 +75,8 @@ jobs:
           key: ${{ secrets.STAGING_EC2_KEY }}
           script: |
             chmod +x ~/deploy/deploy-engine.sh
-            ~/deploy/deploy-engine.sh ${{ github.sha }} ~/deploy/engine-${{ github.sha }}.tar.gz
+            # staging never waits for calls: a test call there must not hold up the pipeline (production does check, LEA-80)
+            ~/deploy/deploy-engine.sh ${{ github.sha }} ~/deploy/engine-${{ github.sha }}.tar.gz --force
             rm -f ~/deploy/engine-${{ github.sha }}.tar.gz
 
   smoke-staging:

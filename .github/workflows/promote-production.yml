@@ -10,6 +10,19 @@ on:
         description: "Tick to roll back to the previous production version instead"
         type: boolean
         default: false
+      wait_minutes:
+        description: "If a call or other action is running: wait up to this many minutes (checks every minute). 0 = do not deploy, stop."
+        required: false
+        default: "0"
+      force:
+        description: "Deploy even while a call is running (only when production is already broken)"
+        type: boolean
+        default: false
+      phase:
+        description: "all = normal. prepare / activate are used by 'Promote release' (load the image first, start it later)."
+        type: choice
+        options: [all, prepare, activate]
+        default: all
 
 concurrency:
   group: engine-production
@@ -21,21 +34,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4.2.2
 
-      - name: Require a SHA unless rolling back
-        if: ${{ !inputs.rollback && inputs.sha == '' }}
-        run: echo "Enter the commit SHA that passed staging."; exit 1
+      - name: Check the inputs and build the options for the server script
+        id: opts
+        env:
+          WAIT: ${{ inputs.wait_minutes }}
+          FORCE: ${{ inputs.force }}
+          SHA: ${{ inputs.sha }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          if ! [[ "${WAIT:-0}" =~ ^[0-9]+$ ]]; then echo "wait_minutes must be a whole number."; exit 1; fi
+          if [ "$ROLLBACK" != "true" ] && [ -z "$SHA" ]; then echo "Enter the commit SHA that passed staging."; exit 1; fi
+          if [ -n "$SHA" ] && ! [[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]]; then echo "The SHA looks wrong."; exit 1; fi
+          flags="--wait-minutes ${WAIT:-0}"
+          if [ "$FORCE" = "true" ]; then flags="$flags --force"; fi
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
+          echo "timeout=$(( ${WAIT:-0} + 12 ))m" >> "$GITHUB_OUTPUT"
 
-      - name: Roll back
+      - name: Put the deploy scripts together
+        run: mkdir -p scripts-out && cp deploy/deploy-engine.sh deploy/guard.sh scripts-out/
+
+      - name: Copy the deploy scripts to production
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          source: "scripts-out/deploy-engine.sh,scripts-out/guard.sh"
+          target: "~/deploy/"
+          strip_components: 1
+
+      - name: Roll back (stops if a call is running)
         if: ${{ inputs.rollback }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
-          script: ~/deploy/deploy-engine.sh --rollback
+          command_timeout: ${{ steps.opts.outputs.timeout }}
+          script: |
+            chmod +x ~/deploy/deploy-engine.sh
+            ~/deploy/deploy-engine.sh --rollback ${{ steps.opts.outputs.flags }}
+
+      - name: Start a version that was loaded before (phase activate)
+        if: ${{ !inputs.rollback && inputs.phase == 'activate' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          command_timeout: ${{ steps.opts.outputs.timeout }}
+          script: |
+            chmod +x ~/deploy/deploy-engine.sh
+            ~/deploy/deploy-engine.sh --activate ${{ inputs.sha }} ${{ steps.opts.outputs.flags }}
 
       - name: Find the staging run for this commit
-        if: ${{ !inputs.rollback }}
+        if: ${{ !inputs.rollback && inputs.phase != 'activate' }}
         id: run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,28 +99,24 @@ jobs:
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
-        if: ${{ !inputs.rollback }}
+        if: ${{ !inputs.rollback && inputs.phase != 'activate' }}
         with:
           name: engine-image-${{ inputs.sha }}
           run-id: ${{ steps.run.outputs.id }}
           github-token: ${{ github.token }}
 
-      - name: Put the deploy script next to the image
-        if: ${{ !inputs.rollback }}
-        run: cp deploy/deploy-engine.sh deploy-engine.sh
-
-      - name: Copy image and script to production
-        if: ${{ !inputs.rollback }}
+      - name: Copy the image to production
+        if: ${{ !inputs.rollback && inputs.phase != 'activate' }}
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
-          source: "engine-${{ inputs.sha }}.tar.gz,deploy-engine.sh"
+          source: "engine-${{ inputs.sha }}.tar.gz"
           target: "~/deploy/"
 
-      - name: Deploy on production (health check + automatic rollback inside the script)
-        if: ${{ !inputs.rollback }}
+      - name: Load only (phase prepare), nothing is restarted
+        if: ${{ !inputs.rollback && inputs.phase == 'prepare' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -75,5 +124,18 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
             chmod +x ~/deploy/deploy-engine.sh
-            ~/deploy/deploy-engine.sh ${{ inputs.sha }} ~/deploy/engine-${{ inputs.sha }}.tar.gz
+            ~/deploy/deploy-engine.sh --prepare ${{ inputs.sha }} ~/deploy/engine-${{ inputs.sha }}.tar.gz
+            rm -f ~/deploy/engine-${{ inputs.sha }}.tar.gz
+
+      - name: Deploy on production (refuses while a call runs; health check + automatic rollback inside the script)
+        if: ${{ !inputs.rollback && inputs.phase == 'all' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          command_timeout: ${{ steps.opts.outputs.timeout }}
+          script: |
+            chmod +x ~/deploy/deploy-engine.sh
+            ~/deploy/deploy-engine.sh ${{ inputs.sha }} ~/deploy/engine-${{ inputs.sha }}.tar.gz ${{ steps.opts.outputs.flags }}
             rm -f ~/deploy/engine-${{ inputs.sha }}.tar.gz

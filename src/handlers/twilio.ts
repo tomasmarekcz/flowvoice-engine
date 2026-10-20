@@ -11,6 +11,7 @@ import { getSupabaseUrl, getSupabaseHeaders, loadAssistantSettings } from "../co
 import { checkCallEligibility } from "../billing";
 import { decideCallRouting } from "../call-routing";
 import { isRecipientAllowed } from "../environment";
+import { beginDial, endDial } from "../activity";
 import { guardTwilioRequest, createStreamAuth, validationEnabled, verifyStreamAuth } from "../twilio-security";
 
 const DIAL_TO_OWNER_TIMEOUT_SECONDS = 20;
@@ -123,6 +124,8 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
       projectId, callerPhone, callSid,
       withAiFallback: routing.withAiFallback,
     });
+    // While the owner's phone rings, a restart of the engine would drop the call (LEA-80).
+    if (callSid) beginDial(callSid, projectId);
     res.type("text/xml").send(twiml);
     return;
   }
@@ -142,6 +145,7 @@ export async function handleDialStatusCallback(req: Request, res: Response): Pro
   const projectId = (req.query["project_id"] as string) ?? "";
   const callerPhone = (req.query["caller_phone"] as string) ?? "";
   const callSid = (req.query["call_sid"] as string) ?? "";
+  if (callSid) endDial(callSid);
 
   logger.info("dial status callback", { project_id: projectId, dial_call_status: dialCallStatus, with_ai_fallback: withAiFallback });
 

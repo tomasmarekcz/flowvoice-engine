@@ -244,3 +244,35 @@ describe("on staging the owner's phone is only dialed when it is on the allowlis
     expect(res.text).toContain("+420700000000");
   });
 });
+
+describe("release guard: a call that is ringing the owner counts as running (LEA-80)", () => {
+  beforeEach(async () => {
+    mockFetch.mockReset();
+    (await import("../src/activity")).resetActivityForTests();
+  });
+
+  it("is counted from the moment the owner's phone rings until Twilio reports the result", async () => {
+    const { snapshot } = await import("../src/activity");
+    mockSupabaseAndEligibility({ answerMode: "outside_hours", ownerPhone: "+420700000000", workingHours: ALWAYS_OPEN });
+
+    const res = await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA777");
+    expect(res.text).toContain("<Dial");
+    expect(snapshot()).toMatchObject({ active: 1, calls: [{ phase: "dialing" }] });
+
+    await request(makeApp())
+      .post("/twilio/voice/dial-status?project_id=p&caller_phone=%2B420777123456&call_sid=CA777&with_ai_fallback=false")
+      .send("DialCallStatus=completed");
+    expect(snapshot().active).toBe(0);
+  });
+
+  it("an AI-only call is not counted by the webhook (the stream session counts it)", async () => {
+    const { snapshot } = await import("../src/activity");
+    mockSupabaseAndEligibility({ answerMode: "always", ownerPhone: "+420700000000", workingHours: HOURS });
+    await request(makeApp())
+      .post("/twilio/voice?project_id=11111111-1111-1111-1111-111111111111")
+      .send("From=sip:+420777123456@sip.zadarma.com&CallSid=CA778");
+    expect(snapshot().active).toBe(0);
+  });
+});

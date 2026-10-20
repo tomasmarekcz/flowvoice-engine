@@ -3,6 +3,7 @@ import http from "http";
 import { WebSocketServer } from "ws";
 import { handleTwilioVoiceWebhook, handleRecordingStatusCallback, handleDialStatusCallback, handleSmsStatusCallback, handleTwilioConnection } from "./handlers/twilio";
 import { handleBrowserConnection } from "./handlers/browser";
+import { handleActiveCalls } from "./handlers/activity";
 import { logger } from "./logger";
 import { assertEnvironmentSafe } from "./environment";
 import { assertTwilioSecurityConfigured } from "./twilio-security";
@@ -24,6 +25,8 @@ app.use(express.urlencoded({ extended: false }));
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
+
+app.get("/internal/active-calls", handleActiveCalls);
 
 app.post("/twilio/voice", inLogContext(handleTwilioVoiceWebhook));
 app.post("/twilio/voice/dial-status", inLogContext(handleDialStatusCallback));
