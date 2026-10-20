@@ -28,7 +28,8 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
     });
     if (!validationOn) {
       expect(unsigned.status).toBe(200);
-      expect(await unsigned.text()).toContain("/ws/twilio");
+      // Depending on the project's answer mode the webhook connects the AI or rings the owner first.
+      expect(await unsigned.text()).toMatch(/\/ws\/twilio|<Dial/);
       return;
     }
     expect(unsigned.status).toBe(403);
@@ -41,7 +42,7 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
       body: new URLSearchParams(params).toString(),
     });
     expect(signed.status).toBe(200);
-    expect(await signed.text()).toContain("/ws/twilio");
+    expect(await signed.text()).toMatch(/\/ws\/twilio|<Dial/);
   });
 
   it("a simulated call: assistant greets, and the call is saved with an end time", async () => {

@@ -44,12 +44,15 @@ export async function waitFor<T>(
   }
 }
 
-// With validation on, the stream only starts with the token our webhook puts into the TwiML. Ask the webhook
-// the way Twilio does (signed with the full URL, query string included) and read the token from its answer.
+// With validation on, the stream only starts with the token our webhook puts into the TwiML. The dial-status
+// callback (what Twilio calls when the owner does not pick up) always answers with the AI stream, whatever the
+// project's answer mode is, so ask it the way Twilio does (signed with the full URL, query string included).
 export async function fetchStreamAuth(callSid: string, callerPhone: string): Promise<string | undefined> {
   if (!validationOn) return undefined;
-  const url = `${cfg.base}/twilio/voice?project_id=${cfg.projectId}`;
-  const params = { CallSid: callSid, From: `sip:${callerPhone}@sip.zadarma.com`, To: "+420000000000" };
+  const url =
+    `${cfg.base}/twilio/voice/dial-status?project_id=${cfg.projectId}` +
+    `&caller_phone=${encodeURIComponent(callerPhone)}&call_sid=${encodeURIComponent(callSid)}&with_ai_fallback=true`;
+  const params = { DialCallStatus: "no-answer", CallSid: callSid };
   const res = await fetch(url, {
     method: "POST",
     headers: {
