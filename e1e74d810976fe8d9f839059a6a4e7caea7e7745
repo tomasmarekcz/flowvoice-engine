@@ -1,0 +1,5 @@
+PRODUKCE TODO (LEA-80), nezapomenout:
+1) Nejdřív vytvoř GitHub token RELEASE_PAT a ulož ho jako secret RELEASE_PAT v repu flowvoice (postup: flowvoice/docs/release-process.md, sekce Promote release). Bez něj nejde 'Promote release' (samostatné Promote workflow fungují i bez něj).
+2) PRVNÍ Promote enginu a dashboardu po této změně: produkční verze ještě neumí hlásit aktivitu, skript napíše UPOZORNĚNÍ 'aktivitu nelze zjistit' a pokračuje. Před ním ručně zkontroluj, že nikdo nevolá. Od druhého Promote kontrola funguje naplno.
+3) Pořadí při prvním nasazení: Promote dashboard (přidá /api/internal/activity a Admin ikonku), pak Promote engine (přidá /internal/active-calls). Kontrola hovorů pak funguje u obou.
+4) Ověř v Admin → ikonka vlevo nahoře ukazuje zelenou tečku a 0 po nasazení.
