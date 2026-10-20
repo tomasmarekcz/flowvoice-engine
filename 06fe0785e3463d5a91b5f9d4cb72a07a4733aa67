@@ -1,0 +1,8 @@
+PRODUKCE TODO (LEA-59), nezapomenout:
+Teď běží ověřování podpisu Twilio jen na STAGINGU. Produkce má pořád TWILIO_SKIP_VALIDATION=true v ~/flowvoice-engine/.env.
+Až půjde engine na produkci:
+ 1. Spustit workflow 'Promote engine to production' s tímto (nebo novějším) sha. Proměnná TWILIO_SKIP_VALIDATION=true zatím ZŮSTÁVÁ (chování se nemění).
+ 2. AŽ POTOM smazat řádek TWILIO_SKIP_VALIDATION=true z ~/flowvoice-engine/.env na produkci a kontejner znovu vytvořit (docker stop engine && docker rm engine && docker run -d --restart=always --env-file ~/flowvoice-engine/.env --network host --name engine flowvoice-engine:$(cat ~/deploy/engine.current)). NIKDY před krokem 1: starý engine by odmítl všechny hovory.
+ 3. Vyzkoušet 4 skutečné události: běžný hovor, hovor přesměrovaný na majitele, hovor s nahrávkou, SMS s doručenkou. V logu nesmí být twilio.signature_rejected pro skutečné hovory.
+Rollback: vrátit TWILIO_SKIP_VALIDATION=true do .env a kontejner znovu vytvořit (cca 1 min).
+Tokeny jsou na produkci i stagingu už nastavené (stejný TWILIO_AUTH_TOKEN, ENGINE_INTERNAL_SECRET). Detaily: docs/technical.md (twilio-security.ts), Linear LEA-59.
