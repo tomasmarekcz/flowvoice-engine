@@ -4,6 +4,7 @@ import request from "supertest";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
+process.env.TWILIO_SKIP_VALIDATION = "true";
 process.env.SUPABASE_URL = "https://fake.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-key";
 

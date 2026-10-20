@@ -33,7 +33,8 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
     }
     expect(unsigned.status).toBe(403);
 
-    const signature = twilio.getExpectedTwilioSignature(cfg.twilioToken, url, params);
+    // Twilio signs the full URL including the query string.
+    const signature = twilio.getExpectedTwilioSignature(cfg.twilioToken, `${url}?project_id=${cfg.projectId}`, params);
     const signed = await fetch(`${url}?project_id=${cfg.projectId}`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Twilio-Signature": signature },

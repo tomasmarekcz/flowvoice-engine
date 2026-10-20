@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({ startCallSession: vi.fn() }));
 
 vi.mock("../src/session-factory", () => ({ startCallSession: h.startCallSession }));
 
+process.env.TWILIO_SKIP_VALIDATION = "true";
 process.env.SUPABASE_URL = "https://fake.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "fake-service-key";
 

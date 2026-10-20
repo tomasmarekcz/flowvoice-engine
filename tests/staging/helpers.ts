@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import twilio from "twilio";
 
 export const cfg = {
   base: process.env.STAGING_BASE_URL ?? "",
@@ -9,8 +10,8 @@ export const cfg = {
   internalSecret: process.env.STAGING_ENGINE_INTERNAL_SECRET ?? "",
 };
 
-// Staging mirrors production: Twilio signature checking is OFF there today (LEA-59). Set
-// STAGING_TWILIO_VALIDATION=on once it is switched on; the signed-webhook scenario then needs the token.
+// Twilio signature checking (LEA-59). STAGING_TWILIO_VALIDATION=on when the staging engine enforces it
+// (TWILIO_SKIP_VALIDATION not set); the signed-webhook scenarios then need STAGING_TWILIO_AUTH_TOKEN.
 export const validationOn = process.env.STAGING_TWILIO_VALIDATION === "on";
 
 export const configured =
@@ -43,6 +44,24 @@ export async function waitFor<T>(
   }
 }
 
+// With validation on, the stream only starts with the token our webhook puts into the TwiML. Ask the webhook
+// the way Twilio does (signed with the full URL, query string included) and read the token from its answer.
+export async function fetchStreamAuth(callSid: string, callerPhone: string): Promise<string | undefined> {
+  if (!validationOn) return undefined;
+  const url = `${cfg.base}/twilio/voice?project_id=${cfg.projectId}`;
+  const params = { CallSid: callSid, From: `sip:${callerPhone}@sip.zadarma.com`, To: "+420000000000" };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Twilio-Signature": twilio.getExpectedTwilioSignature(cfg.twilioToken, url, params),
+    },
+    body: new URLSearchParams(params).toString(),
+  });
+  const xml = await res.text();
+  return /<Parameter name="auth" value="([^"]+)"/.exec(xml)?.[1];
+}
+
 // Plays a Twilio Media Streams call against the staging engine: connect, start, then stream the
 // "caller" (silence, 20 ms frames in real time, exactly like Twilio does from the first second)
 // until the assistant's first audio (its greeting) arrives, keep going briefly, and stop.
@@ -50,6 +69,7 @@ export async function simulateCall(opts: {
   callSid: string;
   callerPhone: string;
 }): Promise<{ firstAudioMs: number | null }> {
+  const auth = await fetchStreamAuth(opts.callSid, opts.callerPhone);
   const wsUrl = cfg.base.replace(/^http/, "ws") + "/ws/twilio";
   const ws = new WebSocket(wsUrl);
   await new Promise<void>((res, rej) => {
@@ -81,6 +101,7 @@ export async function simulateCall(opts: {
           project_id: cfg.projectId,
           caller_phone: opts.callerPhone,
           call_sid: opts.callSid,
+          ...(auth ? { auth } : {}),
         },
       },
     })

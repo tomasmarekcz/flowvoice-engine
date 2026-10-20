@@ -320,11 +320,36 @@ plain message. `minLevel()` is `info` in production, `debug` otherwise.
 
 **Depended on by:** every other file in `src/`.
 
+## twilio-security.ts (LEA-59)
+
+**Purpose:** keeps strangers from starting calls. All four Twilio webhooks
+(`/twilio/voice`, `/twilio/voice/dial-status`, `/twilio/recording-status`,
+`/twilio/sms-status`) call `guardTwilioRequest`, which checks Twilio's
+`X-Twilio-Signature` against `TWILIO_AUTH_TOKEN`, the **full** URL Twilio
+called (`https://ENGINE_HOST` + `req.originalUrl`, query string included)
+and the form fields. A rejected request gets 403 and a
+`twilio.signature_rejected` log line (reason, expected URL, project, call;
+never the signature or token). The TwiML `<Stream>` also carries an `auth`
+parameter, an HMAC (`ENGINE_INTERNAL_SECRET`, 5 minutes, bound to project and
+call) that `/ws/twilio` checks on the `start` message
+(`twilio.stream_rejected`). Dashboard test calls use `/ws/browser` with their
+own ticket and are not affected. `TWILIO_SKIP_VALIDATION=true` switches both
+checks off (the one-minute rollback; also for local development). With
+validation on, the engine refuses to start without `TWILIO_AUTH_TOKEN` and
+`ENGINE_INTERNAL_SECRET`, so the deploy script's health check rolls back.
+
+**Production rollout order:** deploy the new engine while
+`TWILIO_SKIP_VALIDATION=true` is still set, then remove the variable and
+recreate the container, then check one call, one call forwarded to the owner,
+one recording and one SMS receipt. Never remove the variable while the old
+engine runs (it signs the URL without the query string and would reject every
+call).
+
 ## handlers/twilio.ts
 
 **Purpose:** Express handler for the Twilio Voice webhook
-(`handleTwilioVoiceWebhook` — validates the Twilio signature unless
-`TWILIO_SKIP_VALIDATION=true`, extracts the caller's phone number from the
+(`handleTwilioVoiceWebhook` — validates the Twilio signature (see
+`twilio-security.ts`) unless `TWILIO_SKIP_VALIDATION=true`, extracts the caller's phone number from the
 SIP `From` header, and returns TwiML that starts call recording and opens
 a Media Stream WebSocket back to this engine with `project_id`/
 `caller_phone`/`call_sid` as stream parameters), the recording-status

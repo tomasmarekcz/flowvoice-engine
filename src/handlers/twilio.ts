@@ -11,6 +11,7 @@ import { getSupabaseUrl, getSupabaseHeaders, loadAssistantSettings } from "../co
 import { checkCallEligibility } from "../billing";
 import { decideCallRouting } from "../call-routing";
 import { isRecipientAllowed } from "../environment";
+import { guardTwilioRequest, createStreamAuth, validationEnabled, verifyStreamAuth } from "../twilio-security";
 
 const DIAL_TO_OWNER_TIMEOUT_SECONDS = 20;
 
@@ -32,6 +33,7 @@ function buildAiConnectTwiml(opts: {
       <Parameter name="project_id" value="${opts.projectId}" />
       <Parameter name="caller_phone" value="${opts.callerPhone}" />
       <Parameter name="call_sid" value="${opts.callSid}" />
+      <Parameter name="auth" value="${createStreamAuth(opts.projectId, opts.callSid)}" />
     </Stream>
   </Connect>
 </Response>`;
@@ -69,20 +71,7 @@ function buildDialToOwnerTwiml(opts: {
 }
 
 export async function handleTwilioVoiceWebhook(req: Request, res: Response): Promise<void> {
-  if (process.env.TWILIO_SKIP_VALIDATION !== "true") {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const twilio = require("twilio") as {
-      validateRequest: (token: string, sig: string, url: string, params: Record<string, string>) => boolean;
-    };
-    const authToken = process.env.TWILIO_AUTH_TOKEN ?? "";
-    const signature = (req.headers["x-twilio-signature"] as string) ?? "";
-    const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "";
-    const url = `https://${engineHost}/twilio/voice`;
-    if (!twilio.validateRequest(authToken, signature, url, req.body as Record<string, string>)) {
-      res.status(403).send("Forbidden");
-      return;
-    }
-  }
+  if (!guardTwilioRequest(req, res)) return;
 
   const body = req.body as Record<string, string>;
   const projectId = (req.query["project_id"] as string) ?? body["project_id"] ?? "";
@@ -147,6 +136,7 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
 // Twilio calls this after a <Dial> to the owner ends (answered, no-answer,
 // busy, failed, or canceled) — see buildDialToOwnerTwiml's action URL.
 export async function handleDialStatusCallback(req: Request, res: Response): Promise<void> {
+  if (!guardTwilioRequest(req, res)) return;
   const dialCallStatus = (req.body as Record<string, string>)["DialCallStatus"] ?? "";
   const withAiFallback = req.query["with_ai_fallback"] === "true";
   const projectId = (req.query["project_id"] as string) ?? "";
@@ -174,6 +164,7 @@ export async function handleDialStatusCallback(req: Request, res: Response): Pro
 }
 
 export async function handleRecordingStatusCallback(req: Request, res: Response): Promise<void> {
+  if (!guardTwilioRequest(req, res)) return;
   const body = req.body as Record<string, string>;
   const status = body["RecordingStatus"];
   const recordingUrl = body["RecordingUrl"];
@@ -226,19 +217,7 @@ async function storeSmsDeliveryStatus(sid: string, status: string, errorCode: st
 }
 
 export async function handleSmsStatusCallback(req: Request, res: Response): Promise<void> {
-  if (process.env.TWILIO_SKIP_VALIDATION !== "true") {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const twilio = require("twilio") as {
-      validateRequest: (token: string, sig: string, url: string, params: Record<string, string>) => boolean;
-    };
-    const signature = (req.headers["x-twilio-signature"] as string) ?? "";
-    const engineHost = process.env.ENGINE_HOST ?? req.get("host") ?? "";
-    const url = `https://${engineHost}/twilio/sms-status`;
-    if (!twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN ?? "", signature, url, req.body as Record<string, string>)) {
-      res.status(403).send("Forbidden");
-      return;
-    }
-  }
+  if (!guardTwilioRequest(req, res)) return;
 
   const body = req.body as Record<string, string>;
   const sid = body["MessageSid"] ?? body["SmsSid"] ?? "";
@@ -287,6 +266,16 @@ export async function handleTwilioConnection(
       const callerPhone = customParams["caller_phone"] || null;
       const callSid = customParams["call_sid"] || null;
       logCtx.set({ project_id: projectId, call_sid: callSid });
+
+      // Only a stream opened by our own webhook may start an assistant session (LEA-59).
+      if (validationEnabled()) {
+        const auth = verifyStreamAuth(customParams["auth"], projectId, callSid);
+        if (!auth.ok) {
+          logger.warn("twilio stream rejected", { event: "twilio.stream_rejected", reason: auth.reason, project_id: projectId ?? "none", call_sid: callSid ?? "none" });
+          ws.close();
+          return;
+        }
+      }
 
       logger.info("Twilio stream started", { stream_sid: streamSid, project_id: projectId ?? "none", call_sid: callSid ?? "none" });
 

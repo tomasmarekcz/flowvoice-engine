@@ -5,10 +5,12 @@ import { handleTwilioVoiceWebhook, handleRecordingStatusCallback, handleDialStat
 import { handleBrowserConnection } from "./handlers/browser";
 import { logger } from "./logger";
 import { assertEnvironmentSafe } from "./environment";
+import { assertTwilioSecurityConfigured } from "./twilio-security";
 import { installFetchLogging } from "./log/fetch-logging";
 import { inLogContext } from "./log-http";
 
 assertEnvironmentSafe(); // throws (process exits) if the environment label and the database disagree
+assertTwilioSecurityConfigured(); // throws (process exits) if Twilio validation is on but its token/secret is missing
 
 installFetchLogging(logger);
 process.on("uncaughtExceptionMonitor", (err) => {
