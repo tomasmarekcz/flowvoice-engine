@@ -11,7 +11,7 @@ import { assertTwilioSecurityConfigured } from "./twilio-security";
 import { installFetchLogging } from "./log/fetch-logging";
 import { inLogContext } from "./log-http";
 import { ALL_ENGINE_PROMPTS } from "./prompts/registry";
-import { getSnapshot, registerPrompts } from "./prompts/store";
+import { getSnapshot, scheduleRegistration } from "./prompts/store";
 
 assertEnvironmentSafe(); // throws (process exits) if the environment label and the database disagree
 assertTwilioSecurityConfigured(); // throws (process exits) if Twilio validation is on but its token/secret is missing
@@ -69,7 +69,8 @@ server.listen(PORT, () => {
 
   // LEA-63: tell the database which prompts this version of the code knows (failures are logged, never fatal),
   // and keep the editable-prompt cache warm so a call never waits for it.
-  void registerPrompts(ALL_ENGINE_PROMPTS).then(() => getSnapshot());
+  scheduleRegistration(ALL_ENGINE_PROMPTS);
+  void getSnapshot();
   setInterval(() => void getSnapshot(), 30_000).unref();
 });
 

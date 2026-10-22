@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { definePrompt } from "../src/prompts/core";
-import { getSnapshot, recordUsage, registerPrompts, resetPromptStoreForTests } from "../src/prompts/store";
+import { getSnapshot, recordUsage, registerPrompts, resetPromptStoreForTests, scheduleRegistration } from "../src/prompts/store";
 
 const def = definePrompt({
   key: "engine.test", app: "engine", title: "T", usedWhen: "U", phase: "during_call",
@@ -91,5 +91,19 @@ describe("recordUsage", () => {
     const writes = calls.filter((c) => c.url.includes("ai_prompt_version_usage"));
     expect(writes).toHaveLength(1);
     expect(JSON.parse(writes[0].body!).map((r: { version_id: string }) => r.version_id)).toEqual(["v1", "v2"]);
+  });
+});
+
+describe("scheduleRegistration", () => {
+  it("registers at once and again every interval, so last_seen_at never goes stale while the engine runs", async () => {
+    const count = () => calls.filter((c) => c.method === "POST" && c.url.includes("/rest/v1/ai_prompts")).length;
+    const stop = scheduleRegistration([def], 1000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(count()).toBe(1);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(count()).toBe(3);
+    stop();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(count()).toBe(3);
   });
 });

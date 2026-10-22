@@ -98,3 +98,11 @@ export function recordUsage(versionIds: string[]): void {
     body: JSON.stringify(fresh.map((id) => ({ version_id: id, last_used_at: now }))),
   }).catch((err) => logger.warn("prompt registry: usage write failed", { event: "prompts.usage_failed", err }));
 }
+
+/** Registers now and then every `everyMs` (default 6 h): `last_seen_at` is how the admin knows a prompt is still used by running code. */
+export function scheduleRegistration(defs: PromptDef[], everyMs = 6 * 3_600_000): () => void {
+  void registerPrompts(defs);
+  const timer = setInterval(() => void registerPrompts(defs), everyMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}

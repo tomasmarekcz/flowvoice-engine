@@ -419,7 +419,7 @@ Feature page with the full design, data model and runbook:
   definitions in total. Each has a mandatory `usedWhen` (shown in the admin).
   `tests/prompts-registry.test.ts` fails when `buildTools()` produces a tool
   or parameter that has no registered description.
-- `store.ts`: `registerPrompts()` (at start from `index.ts`: upserts metadata
+- `store.ts`: `scheduleRegistration()` (from `index.ts`: registers at start and every 6 h so `last_seen_at` stays fresh) and `registerPrompts()` (upserts metadata
   and `code_default` into `admin.ai_prompts`, never the version pointers),
   `getSnapshot()` (active overrides, cached 60 s, refreshed every 30 s by
   `index.ts` so a call never waits; falls back to the last good rows, then to
