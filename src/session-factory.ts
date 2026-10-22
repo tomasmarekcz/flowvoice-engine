@@ -2,6 +2,7 @@ import { beginActivity } from "./activity";
 import { loadAssistantSettings } from "./config";
 import { LiveCallSession } from "./live-session";
 import { logger } from "./logger";
+import { getSnapshot } from "./prompts/store";
 import { CallSession } from "./session";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
@@ -41,10 +42,11 @@ async function createSession(
   twilioCallSid: string | null,
   callbacks: SessionCallbacks
 ): Promise<VoiceSession> {
-  const settings = await loadAssistantSettings(projectId);
+  // The editable prompts are read once per call (LEA-63); they fall back to the code defaults on any problem.
+  const [settings, promptSnapshot] = await Promise.all([loadAssistantSettings(projectId), getSnapshot()]);
 
   if (settings?.voice_engine === "live") {
-    const live = new LiveCallSession(settings, projectId, callerPhone, twilioCallSid, callbacks);
+    const live = new LiveCallSession(settings, projectId, callerPhone, twilioCallSid, callbacks, { promptSnapshot });
     try {
       await live.start();
       return live;
@@ -57,7 +59,7 @@ async function createSession(
     }
   }
 
-  const session = new CallSession(projectId, callerPhone, twilioCallSid, callbacks, settings);
+  const session = new CallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot);
   await session.start();
   return session;
 }

@@ -4,6 +4,8 @@ import { loadAssistantSettings, AssistantSettings } from "./config";
 import { logger } from "./logger";
 import { bindToCurrentContext } from "./log/context";
 import { buildPromptFromSettings, buildTools } from "./prompt";
+import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
+import { getSnapshot, recordUsage } from "./prompts/store";
 import { executeTool } from "./tools";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
 import { planTestCallNotifications } from "./test-call";
@@ -47,6 +49,7 @@ export class CallSession implements VoiceSession {
   private calendarProjectId = "admin-test";
   private ended = false;
   private settings: AssistantSettings | null = null;
+  private promptSnapshot: PromptSnapshot = emptySnapshot();
   private pendingEndCallMark: string | null = null;
   private endCallFallbackTimer: NodeJS.Timeout | null = null;
   private usageAccum = {
@@ -60,7 +63,8 @@ export class CallSession implements VoiceSession {
     callerPhone: string | null,
     twilioCallSid: string | null,
     callbacks: SessionCallbacks,
-    private preloadedSettings?: AssistantSettings | null
+    private preloadedSettings?: AssistantSettings | null,
+    private preloadedSnapshot?: PromptSnapshot
   ) {
     this.projectId = projectId;
     this.callerPhone = callerPhone;
@@ -73,16 +77,20 @@ export class CallSession implements VoiceSession {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-    const [settings] = await Promise.all([
+    const [settings, promptSnapshot] = await Promise.all([
       this.preloadedSettings !== undefined ? this.preloadedSettings : loadAssistantSettings(this.projectId),
+      this.preloadedSnapshot ?? getSnapshot(),
       this.logger.createCall(this.callerPhone),
     ]);
+    // One snapshot of the editable prompts for the whole call (LEA-63); falls back to the code defaults on any problem.
+    this.promptSnapshot = promptSnapshot;
 
     this.settings = settings;
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
 
-    const instructions = buildPromptFromSettings(settings, this.callerPhone);
-    const tools = buildTools(settings);
+    const instructions = buildPromptFromSettings(settings, this.callerPhone, {}, this.promptSnapshot);
+    const tools = buildTools(settings, this.promptSnapshot);
+    recordUsage(this.promptSnapshot.usedVersionIds());
     const voice = settings?.voice ?? "alloy";
 
     this.logger.openaiPayload = { model: "gpt-realtime-2", voice, instructions, tools };
@@ -199,8 +207,9 @@ export class CallSession implements VoiceSession {
       shouldCreateEnquiry, enquiryTitle, enquiryDescription,
     } = await generateCallSummary(
       apiKey, this.logger.transcript, smsOptions, this.settings?._project_language ?? null,
-      !!this.settings?.capabilities?.["enquiries"]
+      !!this.settings?.capabilities?.["enquiries"], this.promptSnapshot
     );
+    recordUsage(this.promptSnapshot.usedVersionIds());
 
     await maybeCreatePostCallEnquiry({
       shouldCreate: shouldCreateEnquiry,

@@ -42,7 +42,7 @@ describe("startCallSession", () => {
     const session = await startCallSession("proj-1", "+420111", "CA1", callbacks);
 
     expect(session.audioFormat).toBe("pcm24");
-    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings);
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything());
     expect(h.stdStart).toHaveBeenCalledOnce();
     expect(h.liveCtor).not.toHaveBeenCalled();
   });
@@ -51,7 +51,7 @@ describe("startCallSession", () => {
     h.loadSettings.mockResolvedValue(null);
     const session = await startCallSession("proj-1", null, null, callbacks);
     expect(session.audioFormat).toBe("pcm24");
-    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", null, null, callbacks, null);
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", null, null, callbacks, null, expect.anything());
   });
 
   it("uses Live when the assistant is set to live", async () => {
@@ -61,7 +61,7 @@ describe("startCallSession", () => {
     const session = await startCallSession("proj-1", "+420111", "CA1", callbacks);
 
     expect(session.audioFormat).toBe("mulaw8");
-    expect(h.liveCtor).toHaveBeenCalledWith(settings, "proj-1", "+420111", "CA1", callbacks);
+    expect(h.liveCtor).toHaveBeenCalledWith(settings, "proj-1", "+420111", "CA1", callbacks, { promptSnapshot: expect.anything() });
     expect(h.stdCtor).not.toHaveBeenCalled();
   });
 
@@ -74,7 +74,7 @@ describe("startCallSession", () => {
 
     expect(h.liveAbort).toHaveBeenCalledOnce();
     expect(session.audioFormat).toBe("pcm24");
-    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings);
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything());
     expect(h.stdStart).toHaveBeenCalledOnce();
   });
 });

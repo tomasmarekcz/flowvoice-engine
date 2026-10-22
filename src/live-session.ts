@@ -1,4 +1,6 @@
 import { WebSocket } from "ws";
+import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
+import { recordUsage } from "./prompts/store";
 import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import type { AssistantSettings } from "./config";
 import { logger } from "./logger";
@@ -32,6 +34,7 @@ const END_CALL_RESUME_GRACE_MS = 1500;
 export interface LiveSessionDeps {
   connect?: (url: string, apiKey: string) => WebSocket;
   executeTool?: typeof defaultExecuteTool;
+  promptSnapshot?: PromptSnapshot;
 }
 
 function defaultConnect(url: string, apiKey: string): WebSocket {
@@ -62,6 +65,7 @@ export class LiveCallSession implements VoiceSession {
   private embeddingTokens = 0;
   private markStarted: (() => void) | null = null;
   private failStart: ((err: Error) => void) | null = null;
+  private promptSnapshot: PromptSnapshot = emptySnapshot();
 
   constructor(
     private readonly settings: AssistantSettings | null,
@@ -76,13 +80,16 @@ export class LiveCallSession implements VoiceSession {
     this.connect = deps.connect ?? defaultConnect;
     this.runTool = deps.executeTool ?? defaultExecuteTool;
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
+    // One snapshot of the editable prompts for the whole call (LEA-63), loaded by the session factory.
+    this.promptSnapshot = deps.promptSnapshot ?? emptySnapshot();
   }
 
   async start(): Promise<void> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
-    const { message } = buildLiveSessionStart(this.settings, this.callerPhone);
+    const { message } = buildLiveSessionStart(this.settings, this.callerPhone, this.promptSnapshot);
+    recordUsage(this.promptSnapshot.usedVersionIds());
     this.logger.openaiPayload = message["session"];
 
     const connectStartedAt = Date.now();
@@ -168,7 +175,7 @@ export class LiveCallSession implements VoiceSession {
   }
 
   private sendGreeting(): void {
-    const greeting = buildLiveGreetingInstruction(this.settings);
+    const greeting = buildLiveGreetingInstruction(this.settings, this.promptSnapshot);
     if (!greeting) return;
     logger.info("sending greeting instruction");
     this.send({
@@ -347,8 +354,9 @@ export class LiveCallSession implements VoiceSession {
       shouldCreateEnquiry, enquiryTitle, enquiryDescription,
     } = await generateCallSummary(
       apiKey, this.logger.transcript, smsOptions, this.settings?._project_language ?? null,
-      !!this.settings?.capabilities?.["enquiries"]
+      !!this.settings?.capabilities?.["enquiries"], this.promptSnapshot
     );
+    recordUsage(this.promptSnapshot.usedVersionIds());
 
     await maybeCreatePostCallEnquiry({
       shouldCreate: shouldCreateEnquiry,

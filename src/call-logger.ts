@@ -1,5 +1,7 @@
 import { getSupabaseUrl, getSupabaseHeaders } from "./config";
 import { logger } from "./logger";
+import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
+import { ENGINE_PROMPTS as P } from "./prompts/registry";
 import { setLogContext } from "./log/context";
 
 export interface TranscriptEntry {
@@ -241,10 +243,9 @@ export class CallLogger {
   }
 }
 
-const DEFAULT_OWNER_SMS_INSTRUCTIONS =
-  "Summarise who called, what they need, and what action is required.";
-const DEFAULT_CALLER_SMS_INSTRUCTIONS =
-  "Thank the caller, briefly confirm what was agreed, and say we will be in touch.";
+// The wording of these defaults lives in the prompt registry (editable in Admin → AI Settings).
+const DEFAULT_OWNER_SMS_INSTRUCTIONS = P.defaultOwnerSmsInstructions.default;
+const DEFAULT_CALLER_SMS_INSTRUCTIONS = P.defaultCallerSmsInstructions.default;
 
 export { DEFAULT_OWNER_SMS_INSTRUCTIONS, DEFAULT_CALLER_SMS_INSTRUCTIONS };
 
@@ -255,7 +256,8 @@ export async function generateCallSummary(
   transcript: TranscriptEntry[],
   smsOptions?: SmsOptions,
   projectLanguage?: string | null,
-  enquiryCheckEnabled?: boolean
+  enquiryCheckEnabled?: boolean,
+  snapshot: PromptSnapshot = emptySnapshot()
 ): Promise<{
   title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null;
   summaryInputTokens: number; summaryOutputTokens: number;
@@ -272,51 +274,28 @@ export async function generateCallSummary(
   const needCallerSms = !!smsOptions?.smsCallerEnabled;
   const needOwnerEmail = !!smsOptions?.emailOwnerEnabled;
 
-  const ownerInstr = smsOptions?.smsOwnerInstructions?.trim() || DEFAULT_OWNER_SMS_INSTRUCTIONS;
-  const callerInstr = smsOptions?.smsCallerInstructions?.trim() || DEFAULT_CALLER_SMS_INSTRUCTIONS;
+  const ownerInstr = smsOptions?.smsOwnerInstructions?.trim() || snapshot.text(P.defaultOwnerSmsInstructions);
+  const callerInstr = smsOptions?.smsCallerInstructions?.trim() || snapshot.text(P.defaultCallerSmsInstructions);
 
   const smsParts = [
-    needOwnerSms
-      ? `\n* owner_sms: Write an SMS for the business owner, maximum 300 characters.\n    Follow these instructions: ${ownerInstr}\n    Include only information supported by the conversation. Make the message immediately understandable without requiring the owner to read the transcript.`
-      : "",
-    needCallerSms
-      ? `\n* caller_sms: Write an SMS for the caller, maximum 300 characters.\n    Follow these instructions: ${callerInstr}\n    Write it as a natural message from the business. Include only confirmed information and never invent dates, times, prices, promises, or next steps.`
-      : "",
-    needOwnerEmail
-      ? `\n* owner_email: Write a professional email body for the business owner summarising this call. 2-4 short paragraphs. Cover: who called and why, key details they provided, what was agreed or what needs action. Plain text only — no markdown, no subject line, no greeting/sign-off (those are added by the template). Be direct and informative.`
-      : "",
+    needOwnerSms ? `\n${snapshot.text(P.summaryOwnerSms, { instructions: ownerInstr })}` : "",
+    needCallerSms ? `\n${snapshot.text(P.summaryCallerSms, { instructions: callerInstr })}` : "",
+    needOwnerEmail ? `\n${snapshot.text(P.summaryOwnerEmail)}` : "",
   ].join("");
 
-  const enquiryPart = enquiryCheckEnabled
-    ? `\n\nAlso decide whether this call needs a business owner enquiry created for follow-up. Only recommend creating one in serious cases — most calls should NOT create one. Create one only if at least one of these is true:
-- The customer was clearly dissatisfied or frustrated during the call.
-- The customer explicitly asked to speak to a human, or asked for a callback from a person.
-- The customer's request was not resolved — the assistant could not help, could not find an answer, or the call ended without a clear outcome.
-
-If none of these apply, do not create an enquiry.
-
-* create_enquiry: true or false
-* enquiry_title (only if create_enquiry is true): a short title (up to 6 words) describing what the customer needed and why it needs follow-up
-* enquiry_description (only if create_enquiry is true): 1-2 sentences explaining what happened and why a human should follow up`
-    : "";
+  const enquiryPart = enquiryCheckEnabled ? `\n\n${snapshot.text(P.summaryEnquiryCheck)}` : "";
 
   const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}${needOwnerEmail ? ',"owner_email":"…"' : ""}${enquiryCheckEnabled ? ',"create_enquiry":false,"enquiry_title":"…","enquiry_description":"…"' : ""}}`;
 
-  const systemPrompt = `You are processing a completed business phone call.
+  const languagePart = projectLanguage && LANGUAGE_NAMES[projectLanguage]
+    ? snapshot.text(P.summaryLanguageForced, { language: LANGUAGE_NAMES[projectLanguage] })
+    : snapshot.text(P.summaryLanguageAuto);
 
-Based only on the conversation, generate:
+  const systemPrompt = `${snapshot.text(P.summaryHead)}
 
-* title: A clear, specific title of up to 6 words that describes the caller's main reason for calling or the outcome of the call. Prefer concrete details such as the requested service, appointment type, problem, or customer intent. Avoid generic titles such as "Customer call", "General inquiry", or "Phone conversation".
-* summary: One concise sentence summarizing the most important information from the call. Include what the caller wanted, any relevant details they provided, and the agreed outcome or next step. Do not include unimportant small talk or repeat information.
+${languagePart}${smsParts ? "\n\nAlso generate:" + smsParts : ""}${enquiryPart}
 
-${
-    projectLanguage && LANGUAGE_NAMES[projectLanguage]
-      ? `Write everything in ${LANGUAGE_NAMES[projectLanguage]} — the business's configured language.`
-      : "Use the language primarily spoken by the caller."
-  }${smsParts ? "\n\nAlso generate:" + smsParts : ""}${enquiryPart}
-
-Return valid JSON only, with no markdown or additional text:
-${responseShape}`;
+${snapshot.text(P.summaryTail, { response_shape: responseShape })}`;
 
   const lines = transcript
     .map((t) => `${t.role === "user" ? "Customer" : "Assistant"}: ${t.text}`)
