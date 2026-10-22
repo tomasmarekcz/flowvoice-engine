@@ -229,7 +229,8 @@ dashboard's `/api/calendar/slots`, `/api/services`, `/api/resources`,
 
 **Purpose:** Builds the actual instructions string sent to OpenAI for a
 call, assembled from up to five sections: (1) universal base prompt
-(hardcoded, never editable), (2) business-context block from
+(default in the prompt registry, see "prompts/" below; can be overridden
+per environment from Admin → AI Settings), (2) business-context block from
 `AssistantSettings` (name, industry, description, website, language,
 active service names, today's date in `Europe/Prague`), (3) tools
 preamble, (4) optional client-editable business instructions, (5) optional
@@ -242,8 +243,11 @@ via `buildTools()`, which now includes `search_knowledge` when the
 `business_knowledge` capability is on, with a description that mentions
 the configured `knowledge_top_n` value.
 
-**Main exports:** `buildPromptFromSettings(settings)`, `buildTools(settings)`,
-`OpenAITool` (interface).
+**Main exports:** `buildPromptFromSettings(settings, callerPhone?, opts?, snapshot?)`,
+`buildTools(settings, snapshot?)`, `OpenAITool` (interface). The wording of every
+section and of every tool and parameter description comes from the registry
+through the `snapshot` (default: `emptySnapshot()` = code defaults); the code
+still decides which tools exist, their names, parameter types and `required`.
 
 **Depends on:** `config.ts` (`AssistantSettings` type only).
 
@@ -392,3 +396,55 @@ mu-law, so the browser's 24 kHz audio is converted both ways (`audio.ts`).
 **Depends on:** `session-factory.ts`, `audio.ts`, `test-call-ticket.ts`, `billing.ts`, `logger.ts`.
 
 **Depended on by:** `index.ts` (registers this as the `/ws/browser` handler).
+
+## prompts/ and handlers/prompt-preview.ts (LEA-63)
+
+**Purpose:** Every text the engine sends to OpenAI has its default in
+`src/prompts/registry.ts` and can be overridden per environment from the
+dashboard's Admin → AI Settings (edit on staging, promote to production with
+the GitHub workflow "Promote prompts to production", one-click rollback).
+Feature page with the full design, data model and runbook:
+`flowvoice/docs/features/ai-settings-prompts.md`.
+
+- `core.ts`: verbatim copy of the dashboard's `src/lib/prompts/core.ts`
+  (`definePrompt`, `renderTemplate`, `validateOverride`, `createSnapshot`,
+  `emptySnapshot`). `tests/prompts-core-parity.test.ts` keeps both identical
+  when the repos sit side by side. Placeholders are `{{name}}`, values are inserted
+  literally.
+- `registry.ts`: `ENGINE_PROMPTS` (instructions: Standard and Live voice,
+  business context, caller phone, customer instructions wrapper, greeting,
+  ending the call; post-call: summary head, language, owner SMS, caller SMS,
+  owner e-mail, enquiry check, JSON tail, default SMS instructions) and
+  `ENGINE_TOOLS` (a description for every tool and every parameter). 52
+  definitions in total. Each has a mandatory `usedWhen` (shown in the admin).
+  `tests/prompts-registry.test.ts` fails when `buildTools()` produces a tool
+  or parameter that has no registered description.
+- `store.ts`: `registerPrompts()` (at start from `index.ts`: upserts metadata
+  and `code_default` into `admin.ai_prompts`, never the version pointers),
+  `getSnapshot()` (active overrides, cached 60 s, refreshed every 30 s by
+  `index.ts` so a call never waits; falls back to the last good rows, then to
+  code defaults, and logs `prompts.load_failed` / `prompts.override_invalid`),
+  `recordUsage()` (once per version and process into
+  `admin.ai_prompt_version_usage`, the Promote gate "tried on staging").
+- The snapshot is created **once per call** in `session-factory.ts` (parallel
+  to `loadAssistantSettings`) and passed to `CallSession` /
+  `LiveCallSession`, which use it for the call's prompts, the greeting and
+  the post-call summary. A running call keeps its snapshot.
+- Without overrides every assembled prompt is byte-identical to the
+  pre-registry code: `tests/prompts-golden.test.ts` compares all outputs with
+  `tests/fixtures/prompts-golden.json` (captured before the refactor, fixed
+  clock). If you change a default on purpose, regenerate that fixture in the
+  same change and say so.
+- `handlers/prompt-preview.ts`: `POST /internal/prompt-preview {project_id,
+  mask_customer?}` returns the standard prompt, the Live voice and backend
+  prompts and the tool list for a project with the current overrides; the
+  customer's own instructions and greeting are replaced by markers. Same
+  protection as `/internal/active-calls` (`X-Internal-Secret`, not proxied by
+  nginx).
+
+**Depends on:** `config.ts` (Supabase URL and headers), `logger.ts`.
+
+**Depended on by:** `prompt.ts`, `live-protocol.ts`, `call-logger.ts`,
+`session-factory.ts`, `session.ts`, `live-session.ts`, `index.ts`.
+
+**Last verified:** 2026-10-22, engine `721ee54`, dashboard `0feb235`. **Issues:** LEA-63.
