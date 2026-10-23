@@ -1,4 +1,5 @@
 import type { AssistantSettings } from "./config";
+import { buildEnquiryRules, enquiryDetailsNote, enquiryEmailNote } from "./enquiry-rules";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P, ENGINE_TOOLS as T } from "./prompts/registry";
 
@@ -125,26 +126,16 @@ export function buildTools(settings: AssistantSettings | null, snapshot: PromptS
   }
 
   if (caps["enquiries"]) {
-    const triggers = Array.isArray(settings?.enquiries_trigger)
-      ? settings.enquiries_trigger
-      : ["cant_help"];
-    const triggerLabels: Record<string, string> = {
-      cant_help: "you can't fully resolve the customer's request",
-      wants_booking: "the customer wants to book a service",
-      wants_quote: "the customer requests a quote",
-      needs_support: "the customer needs support",
-      custom: settings?.enquiries_trigger_custom ?? "a custom condition is met",
-    };
-    const triggerNote = triggers.map((t) => triggerLabels[t] ?? t).join("; ");
-    const enquiryReqFields = settings?.enquiries_required_fields ?? { email: false };
+    const rules = buildEnquiryRules(settings);
     const enquiryRequired = ["title", "customer_phone", "customer_name"];
-    if (enquiryReqFields["email"]) enquiryRequired.push("customer_email");
+    if (rules.emailRequired) enquiryRequired.push("customer_email");
     tools.push({
       type: "function",
       name: "create_enquiry",
       description: describe("create_enquiry", {
-        triggers: triggerNote,
-        email_note: enquiryReqFields["email"] ? " Also ask for their email address — it's required for this business." : "",
+        triggers: rules.conditions.join("; "),
+        email_note: enquiryEmailNote(rules),
+        details_note: enquiryDetailsNote(rules),
       }),
       parameters: {
         type: "object",

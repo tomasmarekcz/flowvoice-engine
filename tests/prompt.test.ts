@@ -169,6 +169,32 @@ describe("buildTools", () => {
     expect(enq.description).toContain("the customer mentions insurance");
   });
 
+  it("the 'talk to a human' condition appears in the enquiry tool description", () => {
+    const tools = buildTools({ ...BASE, capabilities: { enquiries: true }, enquiries_trigger: ["wants_human", "wants_booking"] });
+    const enq = tools.find((t) => t.name === "create_enquiry")!;
+    expect(enq.description).toContain("the customer asks to speak with a human");
+    expect(enq.description).toContain("the customer wants to book a service");
+  });
+
+  it("settings saved with the old 'needs_support' option still produce a sentence", () => {
+    const tools = buildTools({ ...BASE, capabilities: { enquiries: true }, enquiries_trigger: ["needs_support"] });
+    expect(tools.find((t) => t.name === "create_enquiry")!.description).toContain("the customer needs support");
+  });
+
+  it("the owner's details are added to the enquiry tool description, trimmed and limited", () => {
+    const tools = buildTools({ ...BASE, capabilities: { enquiries: true }, enquiries_extra_info: "  the address\n and urgency " });
+    expect(tools.find((t) => t.name === "create_enquiry")!.description).toContain(
+      "Also ask the customer for the following and include it in the description: the address and urgency After calling"
+    );
+    const long = buildTools({ ...BASE, capabilities: { enquiries: true }, enquiries_extra_info: "x".repeat(900) });
+    expect(long.find((t) => t.name === "create_enquiry")!.description).not.toContain("x".repeat(501));
+  });
+
+  it("without details the enquiry tool description has no details sentence", () => {
+    const tools = buildTools({ ...BASE, capabilities: { enquiries: true }, enquiries_extra_info: "   " });
+    expect(tools.find((t) => t.name === "create_enquiry")!.description).not.toContain("Also ask the customer for the following");
+  });
+
   it("does not include search_knowledge when business_knowledge capability is off", () => {
     const tools = buildTools({ ...BASE, capabilities: { business_knowledge: false } });
     expect(tools.find((t) => t.name === "search_knowledge")).toBeUndefined();

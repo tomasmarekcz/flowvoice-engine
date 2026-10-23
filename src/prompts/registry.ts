@@ -150,17 +150,21 @@ Based only on the conversation, generate:
     "* owner_email: Write a professional email body for the business owner summarising this call. 2-4 short paragraphs. Cover: who called and why, key details they provided, what was agreed or what needs action. Plain text only — no markdown, no subject line, no greeting/sign-off (those are added by the template). Be direct and informative."),
 
   summaryEnquiryCheck: def("after_call.summary_enquiry_check", "Dodatečné vytvoření poptávky po hovoru",
-    "Po hovoru, když má firma zapnuté poptávky. AI rozhodne, jestli se má vytvořit poptávka k doplnění, když ji asistent nevytvořil během hovoru.", "after_call",
-    `Also decide whether this call needs a business owner enquiry created for follow-up. Only recommend creating one in serious cases — most calls should NOT create one. Create one only if at least one of these is true:
-- The customer was clearly dissatisfied or frustrated during the call.
-- The customer explicitly asked to speak to a human, or asked for a callback from a person.
-- The customer's request was not resolved — the assistant could not help, could not find an answer, or the call ended without a clear outcome.
+    "Po hovoru, když má firma zapnuté poptávky a asistent během hovoru žádnou poptávku nezapsal. AI podle stejných podmínek jako v hovoru rozhodne, jestli se má poptávka dodatečně vytvořit.", "after_call",
+    `Also decide whether this call needs a business owner enquiry created for follow-up. Create one only if at least one of these is true:
+{{conditions}}
 
-If none of these apply, do not create an enquiry.
+If none of these apply, do not create an enquiry.{{details_note}}
 
 * create_enquiry: true or false
-* enquiry_title (only if create_enquiry is true): a short title (up to 6 words) describing what the customer needed and why it needs follow-up
-* enquiry_description (only if create_enquiry is true): 1-2 sentences explaining what happened and why a human should follow up`),
+* enquiry_title (only if create_enquiry is true): a short title (up to 6 words) describing the request
+* enquiry_description (only if create_enquiry is true): a brief summary of what the customer needs
+* enquiry_customer_name (only if create_enquiry is true): the customer's full name if they said it, otherwise null
+* enquiry_customer_email (only if create_enquiry is true): the customer's email address if they said it, otherwise null`,
+    [
+      ph("conditions", "Situace, kdy se poptávka zakládá (z nastavení firmy), každá na novém řádku. Stejné podmínky jako v hovoru.", true),
+      ph("details_note", "Věta, co dalšího chce firma od zákazníka znát (pole Podrobnosti v nastavení). Doplňuje ji aplikace jen když ho firma vyplnila."),
+    ]),
 
   summaryTail: def("after_call.summary_tail", "Shrnutí hovoru: formát odpovědi",
     "Po každém hovoru na konci pokynu k shrnutí. Říká, že odpověď musí být čistý JSON. Tvar JSON doplňuje aplikace; měnit jde jen úvodní věta.", "after_call",
@@ -210,10 +214,11 @@ export const ENGINE_TOOLS = {
 
   create_enquiry: tool("create_enquiry",
     "Asistent ho vidí v hovoru, když má firma zapnuté poptávky. Podle popisu se rozhoduje, kdy poptávku zapsat k vyřízení majiteli.",
-    "Flag this call for follow-up from the business owner. Use when: {{triggers}}. Always ask for the customer's name first.{{email_note}} After calling, confirm you've logged their request.",
+    "Flag this call for follow-up from the business owner. Use when: {{triggers}}. Always ask for the customer's name first.{{email_note}}{{details_note}} After calling, confirm you've logged their request.",
     [
       ph("triggers", "Situace, kdy se poptávka zakládá (z nastavení firmy), spojené středníkem.", true),
       ph("email_note", "Věta, že je e-mail zákazníka povinný. Doplňuje ji aplikace jen když to firma vyžaduje."),
+      ph("details_note", "Věta, co dalšího má asistent od zákazníka zjistit (pole Podrobnosti v nastavení). Doplňuje ji aplikace jen když ho firma vyplnila."),
     ],
     {
       title: "Short title describing the request",

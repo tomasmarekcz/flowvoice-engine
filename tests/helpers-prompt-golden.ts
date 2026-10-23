@@ -6,6 +6,7 @@ import { buildPromptFromSettings, buildTools } from "../src/prompt";
 import { buildLiveGreetingInstruction, buildLiveSessionStart, buildLiveVoicePrompt } from "../src/live-protocol";
 import { generateCallSummary, type SmsOptions } from "../src/call-logger";
 import type { AssistantSettings } from "../src/config";
+import { buildEnquiryRules, type EnquiryRules } from "../src/enquiry-rules";
 
 const base = {
   project_id: "proj-1", voice: "alloy", is_active: true, appointment_duration: 30, calendar_id: null, _calendar_project_id: "cal-9",
@@ -41,13 +42,23 @@ export const SETTINGS: Record<string, AssistantSettings | null> = {
     greeting_message: "Hello",
     _project_name: "Acme", _project_language: "en",
   } as AssistantSettings,
+  // LEA-101 / LEA-33: the new "talk to a human" condition, the details field and a required e-mail.
+  details: {
+    ...base,
+    capabilities: { enquiries: true },
+    enquiries_trigger: ["wants_human", "cant_help"],
+    enquiries_required_fields: { email: true },
+    enquiries_extra_info: "  The address,\n and how urgent it is.  ",
+    _project_name: "Acme", _project_language: "en",
+  } as AssistantSettings,
 };
 
-const SUMMARY_CASES: Array<{ name: string; sms: SmsOptions; language: string | null; enquiry: boolean }> = [
-  { name: "off", sms: { smsOwnerEnabled: false, smsCallerEnabled: false, smsOwnerInstructions: null, smsCallerInstructions: null, emailOwnerEnabled: false }, language: null, enquiry: false },
-  { name: "all-on-cs", sms: { smsOwnerEnabled: true, smsCallerEnabled: true, smsOwnerInstructions: "Short, with phone number.", smsCallerInstructions: null, emailOwnerEnabled: true }, language: "cs", enquiry: true },
-  { name: "owner-default-en", sms: { smsOwnerEnabled: true, smsCallerEnabled: false, smsOwnerInstructions: "  ", smsCallerInstructions: null, emailOwnerEnabled: false }, language: "en", enquiry: false },
-  { name: "caller-custom", sms: { smsOwnerEnabled: false, smsCallerEnabled: true, smsOwnerInstructions: null, smsCallerInstructions: "Say thanks $& {{x}}", emailOwnerEnabled: true }, language: "xx", enquiry: true },
+const SUMMARY_CASES: Array<{ name: string; sms: SmsOptions; language: string | null; enquiry: EnquiryRules | null }> = [
+  { name: "off", sms: { smsOwnerEnabled: false, smsCallerEnabled: false, smsOwnerInstructions: null, smsCallerInstructions: null, emailOwnerEnabled: false }, language: null, enquiry: null },
+  { name: "all-on-cs", sms: { smsOwnerEnabled: true, smsCallerEnabled: true, smsOwnerInstructions: "Short, with phone number.", smsCallerInstructions: null, emailOwnerEnabled: true }, language: "cs", enquiry: buildEnquiryRules(SETTINGS.full!) },
+  { name: "owner-default-en", sms: { smsOwnerEnabled: true, smsCallerEnabled: false, smsOwnerInstructions: "  ", smsCallerInstructions: null, emailOwnerEnabled: false }, language: "en", enquiry: null },
+  { name: "caller-custom", sms: { smsOwnerEnabled: false, smsCallerEnabled: true, smsOwnerInstructions: null, smsCallerInstructions: "Say thanks $& {{x}}", emailOwnerEnabled: true }, language: "xx", enquiry: buildEnquiryRules(SETTINGS.full!) },
+  { name: "enquiry-details-en", sms: { smsOwnerEnabled: false, smsCallerEnabled: false, smsOwnerInstructions: null, smsCallerInstructions: null, emailOwnerEnabled: false }, language: "en", enquiry: buildEnquiryRules(SETTINGS.details!) },
 ];
 
 async function summaryPrompt(c: (typeof SUMMARY_CASES)[number]): Promise<string> {

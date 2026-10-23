@@ -249,10 +249,39 @@ section and of every tool and parameter description comes from the registry
 through the `snapshot` (default: `emptySnapshot()` = code defaults); the code
 still decides which tools exist, their names, parameter types and `required`.
 
-**Depends on:** `config.ts` (`AssistantSettings` type only).
+**Depends on:** `config.ts` (`AssistantSettings` type only), `enquiry-rules.ts`
+(the conditions, e-mail and details sentences of the `create_enquiry` tool).
 
 **Depended on by:** `session.ts` (`start()`, to build `instructions` and
 `tools` for the `session.update` message).
+
+## enquiry-rules.ts (LEA-101, LEA-33)
+
+**Purpose:** The one place that turns the business's enquiry settings into rules
+for the assistant. The `create_enquiry` tool (during the call) and the
+after-call check (`call-logger.ts`) both read these rules, so an enquiry is
+created under exactly the same conditions in both places. Without it the two
+would drift apart: before LEA-33 the after-call check used its own fixed
+criteria and ignored the owner's settings.
+
+**Main exports:** `buildEnquiryRules(settings)` → `{ conditions, emailRequired, details }`;
+`enquiryEmailNote`, `enquiryDetailsNote` (sentences for the live tool, the
+assistant has to ask during the call) and `enquiryDetailsNoteAfterCall` (for the
+after-call check, which can only report what was said).
+
+**Rules:**
+- `conditions` come from `assistant_settings.enquiries_trigger`: `cant_help`,
+  `wants_booking`, `wants_quote`, `wants_human`, `custom` (text from
+  `enquiries_trigger_custom`). `needs_support` was merged into `cant_help` in the
+  database; the engine still knows the sentence so a setting saved by an old
+  dashboard version does not break. An unknown value is passed through as text.
+- `details` is `assistant_settings.enquiries_extra_info` with whitespace collapsed
+  and cut to 500 characters (`MAX_DETAILS_LENGTH`). It is free text for the
+  assistant, not a required tool parameter.
+
+**Depends on:** `config.ts` (type only).
+
+**Depended on by:** `prompt.ts`, `call-logger.ts`.
 
 ## call-logger.ts
 
@@ -262,7 +291,9 @@ directly (via REST, not through the dashboard API) at call start
 client events arrive, and exposes `generateCallSummary()` to produce the
 post-call title/summary/SMS/email text via GPT once the call ends.
 `generateCallSummary()` now also returns `summaryInputTokens` and
-`summaryOutputTokens` from the GPT response's `usage` object. `finalizeCall()`
+`summaryOutputTokens` from the GPT response's `usage` object. It also decides
+whether a business-owner enquiry has to be created after the call (see
+"After-call enquiry" below). `finalizeCall()`
 accepts an optional `TokenUsage` parameter and patches all 7 token-count
 columns on the `calls` row (realtime audio in/out, realtime text in/out,
 summary in/out, search embedding).
@@ -270,11 +301,29 @@ summary in/out, search embedding).
 **Main exports:** `CallLogger` (class: `createCall()`,
 `handleOpenAIEvent()`, `handleClientEvent()`, `finalizeCall(tokenUsage?)`,
 `callId`, `transcript`, `callDurationSeconds`), `generateCallSummary()`,
+`prepareEnquiryCheck()`, `maybeCreatePostCallEnquiry()`,
 `TokenUsage` (interface), `ZERO_TOKEN_USAGE` (constant), `SmsOptions`,
 `TranscriptEntry`.
 
+**After-call enquiry (safety net):**
+1. Before the summary is generated, `session.ts` and `live-session.ts` call
+   `prepareEnquiryCheck(settings, callId, projectId)`. It returns `null` (no
+   check) when the Enquiries capability is off, when there is no call or project
+   id, or when an enquiry with this `call_id` already exists (the assistant
+   created it during the call). Otherwise it returns the rules from
+   `enquiry-rules.ts`. If the lookup itself fails, the check still runs (a
+   possible duplicate is better than a lost enquiry).
+2. With `null`, the summary prompt does not mention enquiries at all, which also
+   saves tokens. With rules, the prompt lists the business's conditions (the same
+   sentences as the live tool) and asks for `create_enquiry`, title, description,
+   `enquiry_customer_name` and `enquiry_customer_email`.
+3. `maybeCreatePostCallEnquiry()` posts the enquiry to the dashboard
+   (`/api/enquiries`) with the same fields as the live tool: title, description,
+   name and e-mail (only what the customer said), the caller's phone, status
+   `new`. It does not send an enquiry type: the type was removed in LEA-33.
+
 **Depends on:** `config.ts` (`getSupabaseUrl`, `getSupabaseHeaders`),
-`logger.ts`.
+`enquiry-rules.ts`, `logger.ts`.
 
 **Depended on by:** `session.ts` (owns one `CallLogger` per call).
 
@@ -414,7 +463,8 @@ Feature page with the full design, data model and runbook:
 - `registry.ts`: `ENGINE_PROMPTS` (instructions: Standard and Live voice,
   business context, caller phone, customer instructions wrapper, greeting,
   ending the call; post-call: summary head, language, owner SMS, caller SMS,
-  owner e-mail, enquiry check, JSON tail, default SMS instructions) and
+  owner e-mail, enquiry check (uses `{{conditions}}` and `{{details_note}}`),
+  JSON tail, default SMS instructions) and
   `ENGINE_TOOLS` (a description for every tool and every parameter). 52
   definitions in total. Each has a mandatory `usedWhen` (shown in the admin).
   `tests/prompts-registry.test.ts` fails when `buildTools()` produces a tool

@@ -1,4 +1,5 @@
-import { getSupabaseUrl, getSupabaseHeaders } from "./config";
+import { getSupabaseUrl, getSupabaseHeaders, type AssistantSettings } from "./config";
+import { buildEnquiryRules, enquiryDetailsNoteAfterCall, type EnquiryRules } from "./enquiry-rules";
 import { logger } from "./logger";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P } from "./prompts/registry";
@@ -256,17 +257,19 @@ export async function generateCallSummary(
   transcript: TranscriptEntry[],
   smsOptions?: SmsOptions,
   projectLanguage?: string | null,
-  enquiryCheckEnabled?: boolean,
+  enquiryRules: EnquiryRules | null = null,
   snapshot: PromptSnapshot = emptySnapshot()
 ): Promise<{
   title: string | null; summary: string | null; ownerSms: string | null; callerSms: string | null; emailOwner: string | null;
   summaryInputTokens: number; summaryOutputTokens: number;
   shouldCreateEnquiry: boolean; enquiryTitle: string | null; enquiryDescription: string | null;
+  enquiryCustomerName: string | null; enquiryCustomerEmail: string | null;
 }> {
   const empty = {
     title: null, summary: null, ownerSms: null, callerSms: null, emailOwner: null,
     summaryInputTokens: 0, summaryOutputTokens: 0,
     shouldCreateEnquiry: false, enquiryTitle: null, enquiryDescription: null,
+    enquiryCustomerName: null, enquiryCustomerEmail: null,
   };
   if (!apiKey || transcript.length === 0) return empty;
 
@@ -283,9 +286,14 @@ export async function generateCallSummary(
     needOwnerEmail ? `\n${snapshot.text(P.summaryOwnerEmail)}` : "",
   ].join("");
 
-  const enquiryPart = enquiryCheckEnabled ? `\n\n${snapshot.text(P.summaryEnquiryCheck)}` : "";
+  const enquiryPart = enquiryRules
+    ? `\n\n${snapshot.text(P.summaryEnquiryCheck, {
+        conditions: enquiryRules.conditions.map((c) => `- ${c}`).join("\n"),
+        details_note: enquiryDetailsNoteAfterCall(enquiryRules),
+      })}`
+    : "";
 
-  const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}${needOwnerEmail ? ',"owner_email":"…"' : ""}${enquiryCheckEnabled ? ',"create_enquiry":false,"enquiry_title":"…","enquiry_description":"…"' : ""}}`;
+  const responseShape = `{"title":"…","summary":"…"${needOwnerSms ? ',"owner_sms":"…"' : ""}${needCallerSms ? ',"caller_sms":"…"' : ""}${needOwnerEmail ? ',"owner_email":"…"' : ""}${enquiryRules ? ',"create_enquiry":false,"enquiry_title":"…","enquiry_description":"…","enquiry_customer_name":null,"enquiry_customer_email":null' : ""}}`;
 
   const languagePart = projectLanguage && LANGUAGE_NAMES[projectLanguage]
     ? snapshot.text(P.summaryLanguageForced, { language: LANGUAGE_NAMES[projectLanguage] })
@@ -323,6 +331,7 @@ ${snapshot.text(P.summaryTail, { response_shape: responseShape })}`;
     const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as {
       title?: string; summary?: string; owner_sms?: string; caller_sms?: string; owner_email?: string;
       create_enquiry?: boolean; enquiry_title?: string; enquiry_description?: string;
+      enquiry_customer_name?: string | null; enquiry_customer_email?: string | null;
     };
     return {
       title: parsed.title ?? null,
@@ -332,9 +341,11 @@ ${snapshot.text(P.summaryTail, { response_shape: responseShape })}`;
       emailOwner: parsed.owner_email ?? null,
       summaryInputTokens: data.usage?.prompt_tokens ?? 0,
       summaryOutputTokens: data.usage?.completion_tokens ?? 0,
-      shouldCreateEnquiry: enquiryCheckEnabled ? !!parsed.create_enquiry : false,
+      shouldCreateEnquiry: enquiryRules ? !!parsed.create_enquiry : false,
       enquiryTitle: parsed.enquiry_title ?? null,
       enquiryDescription: parsed.enquiry_description ?? null,
+      enquiryCustomerName: parsed.enquiry_customer_name?.trim() || null,
+      enquiryCustomerEmail: parsed.enquiry_customer_email?.trim() || null,
     };
   } catch (e) {
     logger.error("generateCallSummary error", { err: e });
@@ -342,9 +353,34 @@ ${snapshot.text(P.summaryTail, { response_shape: responseShape })}`;
   }
 }
 
-// Safety-net enquiry creation from the post-call summary step, for serious
-// cases the live create_enquiry tool call may have missed. Skips creating a
-// duplicate if the live tool already created one for this call.
+// The after-call safety net only runs when the assistant did not create an enquiry during the call, so this is
+// asked once, before the summary is generated: when an enquiry already exists the summary does not even mention
+// enquiries. Returns the rules the check should follow, or null when no check is needed. If the lookup fails we
+// run the check anyway (a possible duplicate is better than a lost enquiry).
+export async function prepareEnquiryCheck(
+  settings: AssistantSettings | null,
+  callId: string | null,
+  projectId: string | null
+): Promise<EnquiryRules | null> {
+  if (!settings?.capabilities?.["enquiries"] || !callId || !projectId) return null;
+  try {
+    const res = await fetch(
+      `${getSupabaseUrl()}/rest/v1/enquiries?call_id=eq.${callId}&select=id&limit=1`,
+      { headers: getSupabaseHeaders() }
+    );
+    const existing = (await res.json()) as Array<{ id: string }>;
+    if (Array.isArray(existing) && existing.length > 0) {
+      logger.info("post-call enquiry check skipped, enquiry already exists", { call_id: callId });
+      return null;
+    }
+  } catch (e) {
+    logger.error("enquiry existence check failed, running the check anyway", { call_id: callId, err: e });
+  }
+  return buildEnquiryRules(settings);
+}
+
+// Creates the enquiry the after-call check asked for. Same data as the live create_enquiry tool; the name and
+// email are only what the customer said during the call, because nobody can ask any more.
 export async function maybeCreatePostCallEnquiry(opts: {
   shouldCreate: boolean;
   callId: string | null;
@@ -352,24 +388,13 @@ export async function maybeCreatePostCallEnquiry(opts: {
   callerPhone: string | null;
   enquiryTitle: string | null;
   enquiryDescription: string | null;
+  customerName?: string | null;
+  customerEmail?: string | null;
 }): Promise<void> {
-  const { shouldCreate, callId, projectId, callerPhone, enquiryTitle, enquiryDescription } = opts;
+  const { shouldCreate, callId, projectId, callerPhone, enquiryTitle, enquiryDescription, customerName, customerEmail } = opts;
   if (!shouldCreate || !callId || !projectId) return;
 
   try {
-    const url = getSupabaseUrl();
-    const headers = getSupabaseHeaders();
-
-    const existingRes = await fetch(
-      `${url}/rest/v1/enquiries?call_id=eq.${callId}&select=id&limit=1`,
-      { headers }
-    );
-    const existing = (await existingRes.json()) as Array<{ id: string }>;
-    if (Array.isArray(existing) && existing.length > 0) {
-      logger.info("post-call enquiry skipped, already exists", { call_id: callId });
-      return;
-    }
-
     const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
     const res = await fetch(`${base}/api/enquiries`, {
       method: "POST",
@@ -383,7 +408,8 @@ export async function maybeCreatePostCallEnquiry(opts: {
         title: enquiryTitle ?? "Follow-up needed",
         description: enquiryDescription ?? null,
         customer_phone: callerPhone || "unknown",
-        enquiry_type: "support",
+        customer_name: customerName ?? null,
+        customer_email: customerEmail ?? null,
         status: "new",
       }),
     });

@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
+import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, prepareEnquiryCheck, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import { loadAssistantSettings, AssistantSettings } from "./config";
 import { logger } from "./logger";
 import { bindToCurrentContext } from "./log/context";
@@ -202,12 +202,14 @@ export class CallSession implements VoiceSession {
         }
       : undefined;
 
+    const enquiryRules = await prepareEnquiryCheck(this.settings, this.logger.callId, this.projectId);
+
     const {
       title, summary, ownerSms, callerSms, emailOwner, summaryInputTokens, summaryOutputTokens,
-      shouldCreateEnquiry, enquiryTitle, enquiryDescription,
+      shouldCreateEnquiry, enquiryTitle, enquiryDescription, enquiryCustomerName, enquiryCustomerEmail,
     } = await generateCallSummary(
       apiKey, this.logger.transcript, smsOptions, this.settings?._project_language ?? null,
-      !!this.settings?.capabilities?.["enquiries"], this.promptSnapshot
+      enquiryRules, this.promptSnapshot
     );
     recordUsage(this.promptSnapshot.usedVersionIds());
 
@@ -218,6 +220,8 @@ export class CallSession implements VoiceSession {
       callerPhone: this.callerPhone,
       enquiryTitle,
       enquiryDescription,
+      customerName: enquiryCustomerName,
+      customerEmail: enquiryCustomerEmail,
     });
 
     const ownerSmsFinal = ownerSms
