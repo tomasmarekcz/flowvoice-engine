@@ -39,6 +39,19 @@ The following information describes the business you represent. Use it to answer
     `===TOOLS===
 Use the available tools whenever they are needed to provide accurate information or complete the caller's request. Follow each tool's requirements exactly. Do not claim that an action succeeded unless the capability returned a successful result.`),
 
+  callBookingEnquiryOnly: def("call.booking_enquiry_only", "Firma termíny přes asistenta nedomlouvá (Standard i Live hlas)",
+    "V hovoru, když má firma kalendář vypnutý (režim „Jen poptávka“). Asistent nenabízí termíny, jen zapíše, kdy se volajícímu hodí, a firma mu zavolá zpět.", "during_call",
+    `===BOOKING===
+This business does not book appointments through you. Never offer or promise a specific time. If the caller wants an appointment, ask what they need and which day and time of day would suit them, record it with create_enquiry (put the preferred time in the description), and tell them the business will call them back to agree on a time.`),
+
+  bookingStatusPending: def("call.booking_status_pending", "Rezervace: čeká na potvrzení majitele",
+    "V popisu nástroje pro rezervaci, když si majitel potvrzuje rezervace sám. Asistent řekne volajícímu, že je termín předběžný.", "during_call",
+    "The booking is written as preliminary and waits for the business to confirm it: tell the customer it is preliminary and that the business will confirm it afterwards."),
+
+  bookingStatusConfirmed: def("call.booking_status_confirmed", "Rezervace: potvrzená rovnou",
+    "V popisu nástroje pro rezervaci, když majitel zvolil zápis rovnou. Asistent řekne volajícímu, že je termín potvrzený.", "during_call",
+    "The booking is confirmed immediately: tell the customer the appointment is confirmed. They will get an SMS with the confirmation."),
+
   callBusinessInstructions: def("call.business_instructions", "Obal kolem instrukcí zákazníka (Standard hlas)",
     "V hovoru, když zákazník v Assistant → Instructions napsal vlastní instrukce. Tento text je obalí; samotné instrukce zákazníka se tady neupravují.", "during_call",
     `===BUSINESS INSTRUCTIONS===
@@ -172,6 +185,22 @@ If none of these apply, do not create an enquiry.{{details_note}}
 {{response_shape}}`,
     [ph("response_shape", "Tvar očekávaného JSON, který sestaví aplikace podle zapnutých funkcí.", true)]),
 
+  summaryCallerSmsBooking: def("after_call.summary_caller_sms_booking", "SMS volajícímu: potvrzený termín",
+    "Po hovoru, když má majitel zapnuté SMS volajícímu a asistent během hovoru zapsal rovnou potvrzený termín. SMS musí říct, že termín je potvrzený.", "after_call",
+    `The caller booked the following appointment(s) during this call, and the business has already confirmed them. The caller_sms must say that the appointment is confirmed and give the date and time:
+{{bookings}}`,
+    [ph("bookings", "Potvrzené termíny z tohoto hovoru, každý na novém řádku (den a čas ve firemním časovém pásmu).", true)]),
+
+  bookingConfirmedSmsCs: def("after_call.booking_confirmed_sms_cs", "SMS volajícímu: termín potvrzen (česky)",
+    "Po hovoru, když asistent zapsal rovnou potvrzený termín a firma nemá zapnuté SMS volajícímu po hovoru, firma s češtinou. Pevný text bez AI.", "after_call",
+    "Dobrý den, váš termín {{when}} je potvrzen. {{business}}",
+    [ph("when", "Den a čas termínu česky (u více termínů oddělené středníkem).", true), ph("business", "Název firmy; může být prázdný.")]),
+
+  bookingConfirmedSmsEn: def("after_call.booking_confirmed_sms_en", "SMS volajícímu: termín potvrzen (anglicky)",
+    "Po hovoru, když asistent zapsal rovnou potvrzený termín a firma nemá zapnuté SMS volajícímu po hovoru, firma s jiným jazykem než česky. Pevný text bez AI.", "after_call",
+    "Your appointment on {{when}} is confirmed. {{business}}",
+    [ph("when", "Den a čas termínu anglicky (u více termínů oddělené středníkem).", true), ph("business", "Název firmy; může být prázdný.")]),
+
   defaultOwnerSmsInstructions: def("after_call.default_owner_sms_instructions", "Výchozí instrukce k SMS majiteli",
     "Po hovoru, když majitel v nastavení nenapsal vlastní instrukce k SMS majiteli.", "after_call",
     "Summarise who called, what they need, and what action is required."),
@@ -250,8 +279,11 @@ export const ENGINE_TOOLS = {
 
   create_calendar_event: tool("create_calendar_event",
     "Asistent ho vidí v hovoru, když má firma zapnutý kalendář. Podle popisu rezervuje termín poté, co volající potvrdí konkrétní čas.",
-    "Book an appointment after the customer confirms a specific slot. Created as pending_review. Always pass the resource_id of a resource listed as free for that exact block in the get_day_availability response. If more than one resource is free for the time the customer wants, tell them the names and let them choose; if they have no preference, take the first one. Tell the customer which resource you booked. If the booking is rejected because the time is no longer available, call get_day_availability again and offer another time - never claim the booking succeeded. Always ask for the customer's name and phone number before booking.{{email_note}}",
-    [ph("email_note", "Věta, že je e-mail zákazníka povinný. Doplňuje ji aplikace jen když to firma vyžaduje.")],
+    "Book an appointment after the customer confirms a specific slot. {{status_note}} Always pass the resource_id of a resource listed as free for that exact block in the get_day_availability response. If more than one resource is free for the time the customer wants, tell them the names and let them choose; if they have no preference, take the first one. Tell the customer which resource you booked. If the booking is rejected because the time is no longer available, call get_day_availability again and offer another time - never claim the booking succeeded. Always ask for the customer's name and phone number before booking. Only book a service returned by get_services and always pass its service_id. If none of the business's services fits what the customer needs, do not book anything: record an enquiry with create_enquiry instead.{{email_note}}",
+    [
+      ph("status_note", "Věta, jak se rezervace zapíše: předběžně (čeká na majitele), nebo rovnou potvrzená. Doplňuje ji aplikace podle volby majitele."),
+      ph("email_note", "Věta, že je e-mail zákazníka povinný. Doplňuje ji aplikace jen když to firma vyžaduje."),
+    ],
     {
       start_time: "ISO 8601 start time",
       end_time: "ISO 8601 end time",

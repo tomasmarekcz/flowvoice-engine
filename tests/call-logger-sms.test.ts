@@ -13,6 +13,27 @@ const transcript = [
   { role: "user" as const, text: "I need a plumber tomorrow.", timestamp_ms: 2000 },
 ];
 
+describe("caller SMS with a confirmed booking (LEA-132)", () => {
+  const smsOn = { smsOwnerEnabled: false, smsCallerEnabled: true, smsOwnerInstructions: null, smsCallerInstructions: null, emailOwnerEnabled: false };
+  const sentPrompt = () => JSON.parse(mockFetch.mock.calls[mockFetch.mock.calls.length - 1][1].body).messages[0].content as string;
+  const okReply = () => mockFetch.mockResolvedValue({ json: async () => ({ choices: [{ message: { content: JSON.stringify({ title: "t", summary: "s", caller_sms: "c" }) } }] }) });
+
+  it("tells the AI to state that the appointment is confirmed, with the date and time", async () => {
+    okReply();
+    await generateCallSummary("k", transcript, { ...smsOn, confirmedBookings: "- Friday 30 October at 14:00 (Haircut)" });
+    expect(sentPrompt()).toContain("has already confirmed");
+    expect(sentPrompt()).toContain("- Friday 30 October at 14:00 (Haircut)");
+  });
+
+  it("does not mention bookings when there are none, or when the caller SMS is off", async () => {
+    okReply();
+    await generateCallSummary("k", transcript, smsOn);
+    expect(sentPrompt()).not.toContain("has already confirmed");
+    await generateCallSummary("k", transcript, { ...smsOn, smsCallerEnabled: false, confirmedBookings: "- Friday" });
+    expect(sentPrompt()).not.toContain("has already confirmed");
+  });
+});
+
 describe("generateCallSummary SMS extension", () => {
   it("returns ownerSms and callerSms when both SMS enabled", async () => {
     mockFetch.mockResolvedValue({

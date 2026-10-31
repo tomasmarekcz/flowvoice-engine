@@ -67,6 +67,20 @@ describe("buildPromptFromSettings", () => {
   });
 });
 
+describe("booking rules when the business does not book appointments (LEA-130)", () => {
+  it("tells the assistant not to offer times and to record an enquiry, when the calendar is off", () => {
+    const prompt = buildPromptFromSettings({ ...BASE, capabilities: { calendar: false } });
+    expect(prompt).toContain("===BOOKING===");
+    expect(prompt).toContain("create_enquiry");
+    expect(prompt).toContain("Never offer or promise a specific time");
+  });
+
+  it("does not add that block when the calendar is on, or when settings are missing", () => {
+    expect(buildPromptFromSettings({ ...BASE, capabilities: { calendar: true } })).not.toContain("===BOOKING===");
+    expect(buildPromptFromSettings(null)).not.toContain("===BOOKING===");
+  });
+});
+
 describe("buildTools", () => {
   it("returns calendar tools when calendar capability is true", () => {
     const tools = buildTools({ ...BASE, capabilities: { calendar: true } });
@@ -125,6 +139,37 @@ describe("buildTools", () => {
   it("returns enquiry tool when enquiries capability is true", () => {
     const tools = buildTools({ ...BASE, capabilities: { enquiries: true } });
     expect(tools.map((t) => t.name)).toContain("create_enquiry");
+  });
+
+  it("always returns the enquiry tool, even when the stored enquiries capability is off or missing (LEA-144)", () => {
+    expect(buildTools({ ...BASE, capabilities: { enquiries: false } }).map((t) => t.name)).toContain("create_enquiry");
+    expect(buildTools({ ...BASE, capabilities: {} }).map((t) => t.name)).toContain("create_enquiry");
+    expect(buildTools({ ...BASE, capabilities: null }).map((t) => t.name)).toContain("create_enquiry");
+    expect(buildTools(null).map((t) => t.name)).toContain("create_enquiry");
+  });
+
+  it("'talk to a human' is always an enquiry condition, whatever the owner chose (LEA-144)", () => {
+    for (const trigger of [null, ["cant_help"], ["custom"], []]) {
+      const tools = buildTools({ ...BASE, capabilities: { enquiries: true }, enquiries_trigger: trigger as never });
+      expect(tools.find((t) => t.name === "create_enquiry")!.description).toContain("the customer asks to speak with a human");
+    }
+  });
+
+  it("the booking tool says how the booking is written, following the owner's choice (LEA-132)", () => {
+    const describeTool = (flag: boolean | undefined) =>
+      buildTools({ ...BASE, capabilities: { calendar: true }, _calendar_requires_confirmation: flag }).find((t) => t.name === "create_calendar_event")!.description;
+    expect(describeTool(true)).toContain("preliminary");
+    expect(describeTool(undefined)).toContain("preliminary"); // safe default: the owner confirms
+    expect(describeTool(false)).toContain("confirmed immediately");
+    expect(describeTool(false)).not.toContain("preliminary");
+    expect(describeTool(true)).not.toContain("pending_review");
+  });
+
+  it("the booking tool needs a service, and tells the assistant to record an enquiry when no service fits (LEA-131)", () => {
+    const tool = buildTools({ ...BASE, capabilities: { calendar: true } }).find((t) => t.name === "create_calendar_event")!;
+    expect(tool.parameters.required).toContain("service_id");
+    expect(tool.description).toContain("none of the business's services fits");
+    expect(tool.description).toContain("create_enquiry");
   });
 
   it("falls back to calendar tools when settings is null", () => {

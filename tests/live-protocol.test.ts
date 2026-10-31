@@ -115,9 +115,9 @@ describe("buildLiveSessionStart", () => {
     expect(backend).not.toContain("end_call");
   });
 
-  it("sets tool_choice to none when there are no tools", () => {
+  it("keeps tool_choice auto even with no capabilities: the enquiry tool is always there (LEA-144)", () => {
     const { message } = buildLiveSessionStart(settings({ capabilities: {} }), null);
-    expect((message["session"] as StartSession).delegation.responses.tool_choice).toBe("none");
+    expect((message["session"] as StartSession).delegation.responses.tool_choice).toBe("auto");
   });
 
   it("lets env override the model names", () => {

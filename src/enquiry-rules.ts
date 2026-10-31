@@ -24,7 +24,9 @@ export interface EnquiryRules {
 }
 
 export function buildEnquiryRules(settings: AssistantSettings | null): EnquiryRules {
-  const triggers = Array.isArray(settings?.enquiries_trigger) ? settings.enquiries_trigger : ["cant_help"];
+  const chosen = Array.isArray(settings?.enquiries_trigger) ? settings.enquiries_trigger : ["cant_help"];
+  // LEA-144: a caller can always ask for a human, so this condition is always part of the rules.
+  const triggers = chosen.includes("wants_human") ? chosen : [...chosen, "wants_human"];
   const conditions = triggers.map((t) =>
     t === "custom" ? settings?.enquiries_trigger_custom ?? "a custom condition is met" : TRIGGER_LABELS[t] ?? t
   );

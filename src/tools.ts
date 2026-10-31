@@ -108,7 +108,6 @@ export async function executeTool(
           service_id: args["service_id"] ?? null,
           resource_id: args["resource_id"] ?? null,
           source_conversation_id: dbCallId ?? null,
-          status: "pending_review",
           created_by: "ai",
           event_kind: "work",
         }),

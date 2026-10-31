@@ -8,6 +8,7 @@ import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { getSnapshot, recordUsage } from "./prompts/store";
 import { executeTool } from "./tools";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
+import { bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
 import { planTestCallNotifications } from "./test-call";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
@@ -47,6 +48,8 @@ export class CallSession implements VoiceSession {
   private openaiWs: WebSocket | null = null;
   private logger: CallLogger;
   private calendarProjectId = "admin-test";
+  // Appointments written as already confirmed during this call: the caller gets a confirmation after it (LEA-132).
+  private confirmedBookings: ConfirmedBooking[] = [];
   private ended = false;
   private settings: AssistantSettings | null = null;
   private promptSnapshot: PromptSnapshot = emptySnapshot();
@@ -199,6 +202,7 @@ export class CallSession implements VoiceSession {
           smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
           smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
           emailOwnerEnabled: !skipSms && (plan.forceGenerate || (this.settings.email_owner_enabled ?? false)),
+          confirmedBookings: this.confirmedBookings.length > 0 ? bookingsForSummary(this.confirmedBookings, this.settings._calendar_timezone ?? "Europe/Prague") : null,
         }
       : undefined;
 
@@ -233,11 +237,24 @@ export class CallSession implements VoiceSession {
         })
       : null;
 
+    // LEA-132: a booking written as confirmed always reaches the caller as a confirmation: inside the SMS the AI writes
+    // when the owner has the caller SMS on, otherwise as a short fixed SMS.
+    const callerSmsFinal = callerSmsWithConfirmation(
+      callerSms,
+      this.confirmedBookings,
+      {
+        business: this.settings?._project_name ?? null,
+        timezone: this.settings?._calendar_timezone ?? "Europe/Prague",
+        language: this.settings?._project_language ?? null,
+      },
+      this.promptSnapshot
+    );
+
     const { ownerSent, callerSent, ownerSid, callerSid } = await sendSmsNotifications({
       ownerSms: plan.send ? ownerSmsFinal : null,
       ownerPhone: this.settings?.owner_phone ?? null,
       // A test call never texts the number the owner typed: that is their own phone, and nobody asked for the SMS.
-      callerSms: plan.send && !testCall ? callerSms : null,
+      callerSms: plan.send && !testCall ? callerSmsFinal : null,
       callerPhone: this.callerPhone,
     });
 
@@ -251,7 +268,7 @@ export class CallSession implements VoiceSession {
       searchEmbedding:  this.usageAccum.searchEmbedding,
     };
 
-    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSms, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
+    await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSmsFinal, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
 
     // Send email notification if enabled
     if (plan.send && (plan.forceGenerate || this.settings?.email_owner_enabled) && emailOwner && this.logger.callId) {
@@ -370,6 +387,10 @@ export class CallSession implements VoiceSession {
     const t0 = Date.now();
     const knowledgeTopN = this.settings?.knowledge_top_n ?? 5;
     const { result, embeddingTokens } = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN, this.callerPhone);
+    if (name === "create_calendar_event") {
+      const booking = confirmedBookingFromResult(result);
+      if (booking) this.confirmedBookings.push(booking);
+    }
     this.usageAccum.searchEmbedding += embeddingTokens;
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
 

@@ -31,6 +31,8 @@ export interface SmsOptions {
   smsOwnerInstructions: string | null;
   smsCallerInstructions: string | null;
   emailOwnerEnabled: boolean;
+  /** Appointments the assistant wrote as already confirmed during this call, one per line (LEA-132). */
+  confirmedBookings?: string | null;
 }
 
 export interface TokenUsage {
@@ -283,6 +285,9 @@ export async function generateCallSummary(
   const smsParts = [
     needOwnerSms ? `\n${snapshot.text(P.summaryOwnerSms, { instructions: ownerInstr })}` : "",
     needCallerSms ? `\n${snapshot.text(P.summaryCallerSms, { instructions: callerInstr })}` : "",
+    needCallerSms && smsOptions?.confirmedBookings
+      ? `\n    ${snapshot.text(P.summaryCallerSmsBooking, { bookings: smsOptions.confirmedBookings })}`
+      : "",
     needOwnerEmail ? `\n${snapshot.text(P.summaryOwnerEmail)}` : "",
   ].join("");
 
@@ -362,7 +367,8 @@ export async function prepareEnquiryCheck(
   callId: string | null,
   projectId: string | null
 ): Promise<EnquiryRules | null> {
-  if (!settings?.capabilities?.["enquiries"] || !callId || !projectId) return null;
+  // LEA-144: enquiries are on for every account, whatever the stored capability says.
+  if (!callId || !projectId) return null;
   try {
     const res = await fetch(
       `${getSupabaseUrl()}/rest/v1/enquiries?call_id=eq.${callId}&select=id&limit=1`,

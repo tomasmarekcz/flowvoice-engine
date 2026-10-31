@@ -90,6 +90,9 @@ export function buildPromptFromSettings(
     buildBusinessContext(settings, callerPhone, snapshot),
     snapshot.text(P.callToolsPreamble),
   ];
+  // LEA-130: a business that does not book appointments through the assistant (calendar off) gets enquiries instead.
+  const calendarOn = (settings?.capabilities ?? { calendar: true })["calendar"];
+  if (settings && !calendarOn) sections.push(snapshot.text(P.callBookingEnquiryOnly));
   const instructions = buildBusinessInstructions(settings, snapshot);
   if (instructions) sections.push(instructions);
   if (opts.includeGreeting !== false) {
@@ -125,7 +128,9 @@ export function buildTools(settings: AssistantSettings | null, snapshot: PromptS
     });
   }
 
-  if (caps["enquiries"]) {
+  // LEA-144: enquiries are on for every account (a caller can always ask for a human),
+  // whatever the stored capability says.
+  {
     const rules = buildEnquiryRules(settings);
     const enquiryRequired = ["title", "customer_phone", "customer_name"];
     if (rules.emailRequired) enquiryRequired.push("customer_email");
@@ -153,7 +158,7 @@ export function buildTools(settings: AssistantSettings | null, snapshot: PromptS
 
   if (caps["calendar"]) {
     const bookingReqFields = settings?.booking_required_fields ?? { email: false };
-    const bookingRequired = ["start_time", "end_time", "title", "customer_name", "customer_phone"];
+    const bookingRequired = ["start_time", "end_time", "title", "customer_name", "customer_phone", "service_id"];
     if (bookingReqFields["email"]) bookingRequired.push("customer_email");
     tools.push(
       {
@@ -196,6 +201,8 @@ export function buildTools(settings: AssistantSettings | null, snapshot: PromptS
         type: "function",
         name: "create_calendar_event",
         description: describe("create_calendar_event", {
+          // LEA-132: the server writes the booking as preliminary or confirmed following the owner's choice; the assistant is told which.
+          status_note: snapshot.text(settings?._calendar_requires_confirmation === false ? P.bookingStatusConfirmed : P.bookingStatusPending),
           email_note: bookingReqFields["email"] ? " Also ask for their email address — it's required for this business (e.g. to send a call link for online meetings)." : "",
         }),
         parameters: {

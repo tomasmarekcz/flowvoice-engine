@@ -178,13 +178,24 @@ describe("after-call check uses the same rules as the live tool", () => {
   });
 });
 
+describe("buildEnquiryRules (LEA-144)", () => {
+  it("always contains the 'talk to a human' condition exactly once", () => {
+    for (const trigger of [null, [], ["cant_help"], ["wants_human"], ["wants_human", "cant_help"]]) {
+      const rules = buildEnquiryRules({ enquiries_trigger: trigger } as never);
+      expect(rules.conditions.filter((c) => c === "the customer asks to speak with a human")).toHaveLength(1);
+    }
+  });
+});
+
 describe("prepareEnquiryCheck (runs before the summary is generated)", () => {
   beforeEach(() => mockFetch.mockReset());
   const settings = { capabilities: { enquiries: true }, enquiries_trigger: ["cant_help"] } as never;
 
-  it("returns no rules when the enquiries capability is off, without any request", async () => {
-    expect(await prepareEnquiryCheck({ capabilities: { enquiries: false } } as never, "call-1", "p-1")).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
+  it("still checks when the stored enquiries capability is off: enquiries are always on (LEA-144)", async () => {
+    mockFetch.mockResolvedValueOnce({ json: async () => [] });
+    const rules = await prepareEnquiryCheck({ capabilities: { enquiries: false }, enquiries_trigger: ["cant_help"] } as never, "call-1", "p-1");
+    expect(rules).not.toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it("returns no rules without a call id or project id", async () => {
@@ -202,7 +213,10 @@ describe("prepareEnquiryCheck (runs before the summary is generated)", () => {
   it("returns the rules when no enquiry exists yet", async () => {
     mockFetch.mockResolvedValueOnce({ json: async () => [] });
     const rules = await prepareEnquiryCheck(settings, "call-1", "p-1");
-    expect(rules?.conditions).toEqual(["you can't fully resolve the customer's request"]);
+    expect(rules?.conditions).toEqual([
+      "you can't fully resolve the customer's request",
+      "the customer asks to speak with a human",
+    ]);
   });
 
   it("still runs the check when the lookup fails", async () => {

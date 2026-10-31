@@ -213,6 +213,16 @@ dashboard API. `search_knowledge` is handled locally via `knowledge.ts`
 (Qdrant + OpenAI embeddings — no HTTP hop to the dashboard). `end_call`
 is handled entirely inside `session.ts`, not here.
 
+**Bookings (LEA-131, LEA-132):** `create_calendar_event` no longer sends a
+status: the dashboard decides it from the calendar's `requires_owner_confirmation`
+and answers with the stored row. `service_id` is required (the tool schema and the
+server both insist); if no service fits, the tool description tells the assistant
+to call `create_enquiry` instead. A result with `status: "confirmed"` is
+remembered by the session (`booking-confirmation.ts`) so the caller gets a
+confirmation after the call: inside the AI caller SMS when the owner has it on,
+otherwise a short fixed SMS. Details: the dashboard page
+`docs/features/calendar-booking-flow.md`.
+
 **Main exports:** `executeTool(name, args, projectId, calendarProjectId, dbCallId?, knowledgeTopN?)` →
 `Promise<{ result: unknown; embeddingTokens: number }>`. All branches return
 `embeddingTokens: 0` except `search_knowledge`, which propagates the value
@@ -275,6 +285,7 @@ after-call check, which can only report what was said).
   `enquiries_trigger_custom`). `needs_support` was merged into `cant_help` in the
   database; the engine still knows the sentence so a setting saved by an old
   dashboard version does not break. An unknown value is passed through as text.
+- `wants_human` is **always** in the conditions (LEA-144), whatever the owner chose. Enquiries are on for every account: `buildTools` always offers `create_enquiry` and `prepareEnquiryCheck` no longer looks at `capabilities.enquiries`.
 - `details` is `assistant_settings.enquiries_extra_info` with whitespace collapsed
   and cut to 500 characters (`MAX_DETAILS_LENGTH`). It is free text for the
   assistant, not a required tool parameter.
