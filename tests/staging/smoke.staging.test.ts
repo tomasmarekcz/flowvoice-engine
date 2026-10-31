@@ -64,9 +64,15 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
     const h = { "Content-Type": "application/json", "X-Internal-Secret": cfg.internalSecret };
 
     const slots = await fetch(
-      `${cfg.base}/api/calendar/slots?project_id=${cfg.projectId}&from=${encodeURIComponent(new Date().toISOString())}`
+      `${cfg.base}/api/calendar/slots?project_id=${cfg.projectId}&from=${encodeURIComponent(new Date().toISOString())}&duration=30`
     );
     expect(slots.ok).toBe(true);
+
+    // LEA-131: the length of a booking comes from a service (or an explicit duration), never from a calendar default.
+    const noLength = await fetch(
+      `${cfg.base}/api/calendar/slots?project_id=${cfg.projectId}&from=${encodeURIComponent(new Date().toISOString())}`
+    );
+    expect(noLength.status).toBe(400);
 
     const enquiry = await fetch(`${cfg.base}/api/enquiries`, {
       method: "POST",
@@ -83,20 +89,30 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
     const start = new Date(Date.now() + 7 * 24 * 3600 * 1000);
     start.setUTCHours(10, 0, 0, 0);
     const end = new Date(start.getTime() + 3600 * 1000);
-    const event = await fetch(`${cfg.base}/api/calendar/events?project_id=${cfg.projectId}`, {
-      method: "POST",
-      headers: h,
-      body: JSON.stringify({
-        title: `SMOKE ${runId}`,
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
-        customer_phone: "+420111222333",
-        status: "pending_review",
-        created_by: "ai",
-        event_kind: "work",
-      }),
+    const booking = {
+      title: `SMOKE ${runId}`,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      customer_phone: "+420111222333",
+      created_by: "ai",
+      event_kind: "work",
+    };
+
+    // LEA-131: a booking from the assistant without a service is refused (the assistant records an enquiry instead).
+    const noService = await fetch(`${cfg.base}/api/calendar/events?project_id=${cfg.projectId}`, {
+      method: "POST", headers: h, body: JSON.stringify(booking),
     });
-    expect(event.ok).toBe(true);
+    expect(noService.status).toBe(400);
+
+    // With a service the booking works, and the server decides its status (LEA-132). Only when the smoke project has one.
+    const services = (await (await fetch(`${cfg.base}/api/services?project_id=${cfg.projectId}`, { headers: h })).json()) as Array<{ id: string }>;
+    if (Array.isArray(services) && services.length > 0) {
+      const event = await fetch(`${cfg.base}/api/calendar/events?project_id=${cfg.projectId}`, {
+        method: "POST", headers: h, body: JSON.stringify({ ...booking, service_id: services[0].id }),
+      });
+      expect(event.ok).toBe(true);
+      expect(["pending_review", "confirmed"]).toContain(((await event.json()) as { status: string }).status);
+    }
   });
 
   it("the billing cron rejects a wrong secret", async () => {
