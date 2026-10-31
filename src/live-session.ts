@@ -18,6 +18,7 @@ import type { SessionCallbacks, VoiceSession } from "./session-types";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
 import { bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
 import { planTestCallNotifications } from "./test-call";
+import { refreshExternalCalendars } from "./ical-refresh";
 import { executeTool as defaultExecuteTool } from "./tools";
 
 const START_TIMEOUT_MS = 4000;
@@ -90,6 +91,8 @@ export class LiveCallSession implements VoiceSession {
   async start(): Promise<void> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+    refreshExternalCalendars(this.projectId); // in the background, while the assistant greets (LEA-139)
 
     const { message } = buildLiveSessionStart(this.settings, this.callerPhone, this.promptSnapshot);
     recordUsage(this.promptSnapshot.usedVersionIds());

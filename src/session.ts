@@ -10,6 +10,7 @@ import { executeTool } from "./tools";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
 import { bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
 import { planTestCallNotifications } from "./test-call";
+import { refreshExternalCalendars } from "./ical-refresh";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
 export function formatOwnerSms(
@@ -79,6 +80,8 @@ export class CallSession implements VoiceSession {
   async start(): Promise<void> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+    refreshExternalCalendars(this.projectId); // in the background, while the assistant greets (LEA-139)
 
     const [settings, promptSnapshot] = await Promise.all([
       this.preloadedSettings !== undefined ? this.preloadedSettings : loadAssistantSettings(this.projectId),

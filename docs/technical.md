@@ -202,6 +202,10 @@ and costs a few cents per run.
 
 **Depends on:** `live-session.ts`, `config.ts`.
 
+## ical-refresh.ts
+
+**Purpose:** `refreshExternalCalendars(projectId)` (LEA-139). At the start of a call (`session.ts` and `live-session.ts`, in `start()`) it asks the dashboard (`POST /api/calendar/ical-refresh`, header `X-Internal-Secret`) to download the iCal calendars the owner connected, so their busy time is fresh when the caller asks for a time. It is **never awaited** and swallows errors (20 s limit): the download runs while the assistant greets and must not delay or break a call. Details: the dashboard page `docs/features/calendar-sync.md`. Test: `tests/ical-refresh.test.ts`.
+
 ## tools.ts
 
 **Purpose:** `executeTool()` — dispatches a named tool call (as requested
