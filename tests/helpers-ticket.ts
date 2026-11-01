@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 
-// Same format the dashboard signs (flowvoice: src/lib/test-call/ticket.ts).
+// Same format the dashboard signs (dashboard: src/lib/test-call/ticket.ts).
 export function makeTicket(
   secret: string,
   overrides: Partial<{ v: number; p: string; ph: string; max: number; exp: number; n: string }> = {},

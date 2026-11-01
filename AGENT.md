@@ -1,4 +1,4 @@
-# FlowVoice Engine — Agent Notes
+# Leadoro Engine — Agent Notes
 
 ## Architecture
 
@@ -19,7 +19,7 @@ The engine is a Node.js/TypeScript Express server running in Docker on EC2.
 | `OPENAI_API_KEY` | OpenAI API key (Realtime + chat completions) |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token (webhook validation + SMS) |
 | `TWILIO_ACCOUNT_SID` | Twilio Account SID (SMS sending) |
-| `TWILIO_SMS_FROM` | Alphanumeric sender ID for SMS (default: `FlowVoice`) |
+| `TWILIO_SMS_FROM` | Alphanumeric sender ID for SMS (default: `Leadoro`) |
 | `ENGINE_HOST` | Public hostname (e.g. `leadoro.io`) — sets wss/https protocols |
 | `TWILIO_SKIP_VALIDATION` | Set to `true` in dev to skip Twilio signature check |
 | `FRONTEND_API_URL` | URL of Next.js frontend for tool call API routes (default: `http://localhost:3000`) |

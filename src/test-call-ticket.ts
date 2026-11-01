@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 // A test call from the dashboard's QR code connects with a short-lived ticket signed by the dashboard
-// (flowvoice: src/lib/test-call/ticket.ts, same format). The ticket carries the project, the phone number the
+// (dashboard: src/lib/test-call/ticket.ts, same format). The ticket carries the project, the phone number the
 // owner typed and the time limit, so nothing in the URL can be changed by the browser. It is signed with
 // ENGINE_INTERNAL_SECRET (already on both servers) and works once.
 

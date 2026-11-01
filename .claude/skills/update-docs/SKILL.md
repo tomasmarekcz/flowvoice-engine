@@ -3,7 +3,7 @@ name: update-docs
 description: Use when code in this repo changed and docs/technical.md needs to reflect it — updates the module map incrementally based on what actually changed, or generates it from scratch on first run.
 ---
 
-# Update Docs (flowvoice-engine)
+# Update Docs (Leadoro engine)
 
 Keeps `docs/technical.md` current for the voice runtime engine. Runs
 either on request (`/update-docs`) or because a pre-commit hook blocked a
