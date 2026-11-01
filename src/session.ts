@@ -8,17 +8,19 @@ import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { getSnapshot, recordUsage } from "./prompts/store";
 import { executeTool } from "./tools";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
-import { bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
+import { bookingMadeFromResult, bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
+import { fetchOwnerBookingBlock, type OwnerBookingBlock } from "./owner-booking-block";
 import { planTestCallNotifications } from "./test-call";
 import { refreshExternalCalendars } from "./ical-refresh";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
 export function formatOwnerSms(
   rawSummary: string,
-  opts: { callerPhone: string | null; startMs: number; callId: string | null; lang: string | null }
+  opts: { callerPhone: string | null; startMs: number; callId: string | null; lang: string | null; booking?: OwnerBookingBlock | null }
 ): string {
   const isCs = opts.lang === "cs";
-  const header = isCs ? "🆕 Nová konverzace" : "🆕 New conversation";
+  // LEA-149: a call that made a booking is one notice: the heading says so and the booking follows the summary.
+  const header = opts.booking ? `🆕 ${opts.booking.heading}` : isCs ? "🆕 Nová konverzace" : "🆕 New conversation";
   const time = new Intl.DateTimeFormat(isCs ? "cs-CZ" : "en-US", {
     timeZone: "Europe/Prague",
     hour: "2-digit",
@@ -26,7 +28,7 @@ export function formatOwnerSms(
   }).format(opts.startMs);
   const phoneLine = `📞 ${opts.callerPhone ?? (isCs ? "neznámé číslo" : "unknown number")} • ${time}`;
 
-  const lines = [header, phoneLine, rawSummary];
+  const lines = [header, phoneLine, rawSummary, ...(opts.booking?.lines ?? [])];
   if (opts.callId) {
     const base = process.env.PUBLIC_APP_URL ?? "https://leadoro.io";
     lines.push(`🔗 ${base}/conversations/${opts.callId}`);
@@ -51,6 +53,8 @@ export class CallSession implements VoiceSession {
   private calendarProjectId = "admin-test";
   // Appointments written as already confirmed during this call: the caller gets a confirmation after it (LEA-132).
   private confirmedBookings: ConfirmedBooking[] = [];
+  // Any booking (waiting or confirmed) made during this call: the owner's call-summary SMS then carries it (LEA-149).
+  private bookingMade = false;
   private ended = false;
   private settings: AssistantSettings | null = null;
   private promptSnapshot: PromptSnapshot = emptySnapshot();
@@ -231,12 +235,14 @@ export class CallSession implements VoiceSession {
       customerEmail: enquiryCustomerEmail,
     });
 
+    const bookingBlock = ownerSms && this.bookingMade ? await fetchOwnerBookingBlock(this.logger.callId, this.projectId) : null;
     const ownerSmsFinal = ownerSms
       ? formatOwnerSms(ownerSms, {
           callerPhone: this.callerPhone,
           startMs: this.logger.callStartMs,
           callId: this.logger.callId,
           lang: this.settings?._project_language ?? null,
+          booking: bookingBlock,
         })
       : null;
 
@@ -393,6 +399,7 @@ export class CallSession implements VoiceSession {
     if (name === "create_calendar_event") {
       const booking = confirmedBookingFromResult(result);
       if (booking) this.confirmedBookings.push(booking);
+      if (bookingMadeFromResult(result)) this.bookingMade = true;
     }
     this.usageAccum.searchEmbedding += embeddingTokens;
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });

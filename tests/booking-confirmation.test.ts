@@ -77,3 +77,19 @@ describe("standaloneBookingSms (sent when the caller SMS after the call is off)"
     expect(standaloneBookingSms([], { business: "X", timezone: "Europe/Prague", language: "cs" })).toBeNull();
   });
 });
+
+import { bookingMadeFromResult } from "../src/booking-confirmation";
+
+describe("bookingMadeFromResult (LEA-149)", () => {
+  it("is true for a stored booking, waiting or confirmed", () => {
+    expect(bookingMadeFromResult({ id: "e1", status: "pending_review", start_time: FRIDAY.startTime })).toBe(true);
+    expect(bookingMadeFromResult({ id: "e1", status: "confirmed", start_time: FRIDAY.startTime })).toBe(true);
+  });
+
+  it("is false for errors and anything that is not a stored booking", () => {
+    expect(bookingMadeFromResult({ error: "This time slot is no longer available." })).toBe(false);
+    expect(bookingMadeFromResult({ status: "confirmed" })).toBe(false);
+    expect(bookingMadeFromResult(null)).toBe(false);
+    expect(bookingMadeFromResult("nope")).toBe(false);
+  });
+});

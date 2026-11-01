@@ -23,6 +23,13 @@ export function confirmedBookingFromResult(result: unknown): ConfirmedBooking | 
   };
 }
 
+/** True when the server stored a booking from this create_calendar_event result (waiting or confirmed). */
+export function bookingMadeFromResult(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return false;
+  const r = result as Record<string, unknown>;
+  return !("error" in r) && typeof r["id"] === "string" && (r["status"] === "pending_review" || r["status"] === "confirmed");
+}
+
 type Lang = "cs" | "en";
 
 function format(booking: ConfirmedBooking, timezone: string, lang: Lang): string {

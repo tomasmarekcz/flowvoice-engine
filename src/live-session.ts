@@ -16,7 +16,8 @@ import {
 import { formatOwnerSms } from "./session";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
-import { bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
+import { bookingMadeFromResult, bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
+import { fetchOwnerBookingBlock } from "./owner-booking-block";
 import { planTestCallNotifications } from "./test-call";
 import { refreshExternalCalendars } from "./ical-refresh";
 import { executeTool as defaultExecuteTool } from "./tools";
@@ -54,6 +55,8 @@ export class LiveCallSession implements VoiceSession {
   private readonly calendarProjectId: string;
   // Appointments written as already confirmed during this call: the caller gets a confirmation after it (LEA-132).
   private confirmedBookings: ConfirmedBooking[] = [];
+  // Any booking (waiting or confirmed) made during this call: the owner's call-summary SMS then carries it (LEA-149).
+  private bookingMade = false;
   private started = false;
   private readyAt = 0;
   private firstAudioLogged = false;
@@ -277,6 +280,7 @@ export class LiveCallSession implements VoiceSession {
     if (name === "create_calendar_event") {
       const booking = confirmedBookingFromResult(result);
       if (booking) this.confirmedBookings.push(booking);
+      if (bookingMadeFromResult(result)) this.bookingMade = true;
     }
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
     this.sendToolResult(callId, result, true);
@@ -382,12 +386,14 @@ export class LiveCallSession implements VoiceSession {
       customerEmail: enquiryCustomerEmail,
     });
 
+    const bookingBlock = ownerSms && this.bookingMade ? await fetchOwnerBookingBlock(this.logger.callId, this.projectId) : null;
     const ownerSmsFinal = ownerSms
       ? formatOwnerSms(ownerSms, {
           callerPhone: this.callerPhone,
           startMs: this.logger.callStartMs,
           callId: this.logger.callId,
           lang: this.settings?._project_language ?? null,
+          booking: bookingBlock,
         })
       : null;
 

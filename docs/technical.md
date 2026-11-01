@@ -224,7 +224,7 @@ server both insist); if no service fits, the tool description tells the assistan
 to call `create_enquiry` instead. A result with `status: "confirmed"` is
 remembered by the session (`booking-confirmation.ts`) so the caller gets a
 confirmation after the call: inside the AI caller SMS when the owner has it on,
-otherwise a short fixed SMS. Details: the dashboard page
+otherwise a short fixed SMS. Any stored booking (waiting or confirmed, `bookingMadeFromResult`) also makes the owner's call-summary SMS carry it (LEA-149): before texting, the session asks the dashboard `POST /api/notify/booking-block` (`owner-booking-block.ts`, `X-Internal-Secret`) for the heading and lines, and `formatOwnerSms` puts them in. No answer means the SMS goes out as before. Details: the dashboard page
 `docs/features/calendar-booking-flow.md`.
 
 **Main exports:** `executeTool(name, args, projectId, calendarProjectId, dbCallId?, knowledgeTopN?)` →
