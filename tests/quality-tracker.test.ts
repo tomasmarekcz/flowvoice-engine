@@ -246,6 +246,41 @@ describe("safety", () => {
   it("starts with all zeroes", () => {
     expect(setup().tracker.finish()).toEqual({
       interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, fallback: false,
+      first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
     });
+  });
+});
+
+describe("time to the first sound", () => {
+  it("is measured from the start of the call to the first audio of the assistant, once", () => {
+    const { tracker, advance } = setup();
+    advance(900);
+    tracker.assistantAudio(500);
+    advance(5000);
+    tracker.assistantAudio(500);
+    expect(tracker.finish().first_audio_ms).toBe(900);
+  });
+});
+
+describe("line quality", () => {
+  it("counts a jump of 100 ms or more in the caller's audio clock as a gap, not the normal 20 ms step", () => {
+    const { tracker } = setup();
+    for (const ts of [0, 20, 40, 160, 180, 200, 400]) tracker.inboundFrame(ts, -30);
+    expect(tracker.finish().inbound_gaps).toBe(2); // 40 -> 160 and 200 -> 400
+  });
+
+  it("averages the loudness of frames with sound and ignores silence", () => {
+    const { tracker } = setup();
+    tracker.inboundFrame(0, -30);
+    tracker.inboundFrame(20, -40);
+    tracker.inboundFrame(40, -90); // line noise floor, not counted
+    tracker.inboundFrame(60, -Infinity);
+    expect(tracker.finish().caller_dbfs).toBe(-35);
+  });
+
+  it("has no level when the caller never made a sound", () => {
+    const { tracker } = setup();
+    tracker.inboundFrame(0, -80);
+    expect(tracker.finish().caller_dbfs).toBeNull();
   });
 });

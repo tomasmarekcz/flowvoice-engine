@@ -152,7 +152,7 @@ describe("LiveCallSession start", () => {
 });
 
 describe("LiveCallSession audio", () => {
-  it("drops caller audio until the session has started, then forwards it", async () => {
+  it("keeps caller audio that arrives before the session has started and forwards it, in order, once it has", async () => {
     const { session, socket } = makeSession();
     const started = session.start();
     socket.emit("open");
@@ -163,6 +163,7 @@ describe("LiveCallSession audio", () => {
     await started;
     session.handleClientAudio("BBBB");
     expect(socket.sentOfType("session.input_audio.append")).toEqual([
+      { type: "session.input_audio.append", audio: "AAAA" },
       { type: "session.input_audio.append", audio: "BBBB" },
     ]);
   });
@@ -209,6 +210,20 @@ describe("LiveCallSession end_call", () => {
 
     session.handleTwilioMark(callbacks.sendMark.mock.calls[0][0] as string);
     expect(callbacks.endCall).toHaveBeenCalledOnce();
+  });
+
+  it("hangs up once the goodbye is over although Live keeps streaming silent frames (LEA-155)", async () => {
+    vi.useFakeTimers();
+    const { socket, callbacks } = await startSession();
+    const silentFrame = Buffer.alloc(800, 0xff).toString("base64"); // 100 ms of digital silence
+
+    socket.serverSays(functionCallEvent("call_9", "end_call", { reason: "done" }));
+    socket.serverSays({ type: "session.output_audio.delta", delta: "AAA=" }); // the last of the goodbye
+    for (let i = 0; i < 14; i++) {
+      vi.advanceTimersByTime(100);
+      socket.serverSays({ type: "session.output_audio.delta", delta: silentFrame });
+    }
+    expect(callbacks.sendMark).toHaveBeenCalledOnce(); // after ~1.2 s of quiet, not after the 6 s maximum
   });
 
   it("hangs up anyway if Twilio never echoes the mark", async () => {

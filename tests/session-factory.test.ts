@@ -42,7 +42,7 @@ describe("startCallSession", () => {
     const session = await startCallSession("proj-1", "+420111", "CA1", callbacks);
 
     expect(session.audioFormat).toBe("pcm24");
-    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything());
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything(), { audio: "pcm24" });
     expect(h.stdStart).toHaveBeenCalledOnce();
     expect(h.liveCtor).not.toHaveBeenCalled();
   });
@@ -51,7 +51,7 @@ describe("startCallSession", () => {
     h.loadSettings.mockResolvedValue(null);
     const session = await startCallSession("proj-1", null, null, callbacks);
     expect(session.audioFormat).toBe("pcm24");
-    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", null, null, callbacks, null, expect.anything());
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", null, null, callbacks, null, expect.anything(), { audio: "pcm24" });
   });
 
   it("uses Live when the assistant is set to live", async () => {
@@ -75,7 +75,28 @@ describe("startCallSession", () => {
     expect(h.liveAbort).toHaveBeenCalledOnce();
     expect(session.audioFormat).toBe("pcm24");
     // The reason travels with the call so the quality measurement can record the fallback (LEA-154).
-    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything(), "model not available");
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything(), {
+      audio: "pcm24",
+      fallbackReason: "model not available",
+    });
     expect(h.stdStart).toHaveBeenCalledOnce();
+  });
+
+  it("talks to OpenAI in the phone line's own format on a Twilio call, so no audio is converted (LEA-155)", async () => {
+    h.loadSettings.mockResolvedValue({ voice_engine: "standard" });
+    const session = await startCallSession("proj-1", "+420111", "CA1", callbacks, "twilio");
+    expect(session.audioFormat).toBe("pcm24"); // the mocked session; the real one reports mulaw8 for pcmu
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, expect.anything(), expect.anything(), { audio: "pcmu" });
+  });
+
+  it("keeps converting on a Twilio call when TWILIO_STANDARD_AUDIO=pcm24 says so", async () => {
+    process.env.TWILIO_STANDARD_AUDIO = "pcm24";
+    try {
+      h.loadSettings.mockResolvedValue({ voice_engine: "standard" });
+      await startCallSession("proj-1", "+420111", "CA1", callbacks, "twilio");
+      expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, expect.anything(), expect.anything(), { audio: "pcm24" });
+    } finally {
+      delete process.env.TWILIO_STANDARD_AUDIO;
+    }
   });
 });

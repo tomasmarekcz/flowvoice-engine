@@ -3,7 +3,7 @@ import { IncomingMessage } from "http";
 import { URL } from "url";
 import { startCallSession } from "../session-factory";
 import type { VoiceSession } from "../session-types";
-import { openAIAudioToTwilio, twilioAudioToOpenAI } from "../audio";
+import { TelephonyConverter } from "../audio";
 import { randomUUID } from "node:crypto";
 import { logger } from "../logger";
 import { createLogContext } from "../log/context";
@@ -73,10 +73,11 @@ export async function handleBrowserConnection(
   // The test call runs the same engine as a real call (Standard or Live, as the project chose). Live speaks 8 kHz phone
   // audio, so the browser's 24 kHz audio is converted both ways: the test then also sounds like a real phone line.
   let session: VoiceSession | null = null;
+  const converter = new TelephonyConverter();
   const sessionCallbacks = {
     sendAudio: (audio: string, format: "pcm24" | "mulaw8" = "pcm24") => {
       if (ws.readyState === WS.OPEN) {
-        ws.send(JSON.stringify({ type: "response.output_audio.delta", delta: format === "mulaw8" ? twilioAudioToOpenAI(audio) : audio }));
+        ws.send(JSON.stringify({ type: "response.output_audio.delta", delta: format === "mulaw8" ? converter.toOpenAI(audio) : audio }));
       }
     },
     sendJson: (obj: unknown) => {
@@ -93,7 +94,7 @@ export async function handleBrowserConnection(
   };
 
   try {
-    session = await logCtx.run(() => startCallSession(projectId, phone, null, sessionCallbacks));
+    session = await logCtx.run(() => startCallSession(projectId, phone, null, sessionCallbacks, "browser"));
   } catch (e) {
     release();
     ws.send(JSON.stringify({ type: "error", code: "start_failed", message: (e as Error).message }));
@@ -123,7 +124,7 @@ export async function handleBrowserConnection(
 
     if (msg["type"] === "input_audio_buffer.append") {
       const audio = msg["audio"] as string;
-      running.handleClientAudio(running.audioFormat === "mulaw8" ? openAIAudioToTwilio(audio) : audio);
+      running.handleClientAudio(running.audioFormat === "mulaw8" ? converter.toPhone(audio) : audio);
     } else {
       running.handleClientEvent?.(msg);
     }

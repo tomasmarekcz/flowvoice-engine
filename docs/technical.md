@@ -87,14 +87,28 @@ to `response.done` events for `input_token_details` / `output_token_details`
 returned by each `executeTool` call; passes the assembled `TokenUsage`
 object to `finalizeCall()` at call end.
 
-This is the **Standard** voice engine (`gpt-realtime-2`, PCM 24 kHz). It
-implements `VoiceSession` (`audioFormat` is `"pcm24"`). The optional fifth
-constructor argument `preloadedSettings` lets `session-factory.ts` pass in
-settings it already loaded; when it is not `undefined` (`null` counts),
+This is the **Standard** voice engine (`gpt-realtime-2`). It implements
+`VoiceSession`. Its audio format with OpenAI is chosen per call by the last
+constructor argument (`CallSessionOptions.audio`): `"pcmu"` (the phone line's own
+mu-law 8 kHz, `audioFormat` is `"mulaw8"`, nothing is converted; used for Twilio
+calls) or `"pcm24"` (PCM 24 kHz, the default and the browser test call). The
+optional fifth constructor argument `preloadedSettings` lets `session-factory.ts`
+pass in settings it already loaded; when it is not `undefined` (`null` counts),
 `start()` does not load them again.
 
+**Interruption (LEA-155):** OpenAI streams speech about five times faster than
+real time, so the phone line holds seconds of speech that was generated but not
+played. A `PlaybackClock` models that queue. On `input_audio_buffer.speech_started`
+while speech is still queued, `bargeIn()` calls `callbacks.clearAudio()` (a Twilio
+`clear`), sends `conversation.item.truncate` with the milliseconds the caller
+really heard, empties the clock and drops the rest of the cancelled answer until
+the next `response.created`. OpenAI cancels the answer itself. The caller's audio
+that arrives before `session.updated` (OpenAI still expects its default format
+until then) waits in an `InputBuffer` (newest 1.5 s) and is sent in order.
+Details and measurements: the dashboard repo's `docs/features/call-audio.md`.
+
 **Main exports:** `CallSession` (class: `start()`, `handleClientAudio()`,
-`handleClientEvent()`, `handleTwilioMark()`, `end()`), `formatOwnerSms`
+`handleClientEvent()`, `handleTwilioMark()`, `noteInboundFrame()`, `end()`), `formatOwnerSms`
 (shared with `live-session.ts`), `SessionCallbacks` (re-exported type from
 `session-types.ts`).
 
@@ -113,9 +127,10 @@ settings it already loaded; when it is not `undefined` (`null` counts),
 **Purpose:** Shared types for the two voice engines. `AudioFormat`
 (`"pcm24"` for Standard, `"mulaw8"` for Live), `SessionCallbacks`
 (`sendAudio(audio, format?)` where an omitted `format` means PCM 24 kHz,
-`sendJson`, `sendMark`, `endCall`) and `VoiceSession` (the surface the
-Twilio handler uses: `audioFormat`, `start()`, `handleClientAudio()`,
-`handleTwilioMark()`, `end()`).
+`sendJson`, `sendMark`, `endCall`, and the optional `clearAudio` that empties the
+phone line's queue) and `VoiceSession` (the surface the Twilio handler uses:
+`audioFormat`, `start()`, `handleClientAudio()`, `handleTwilioMark()`, the
+optional `noteInboundFrame()` for line quality, `end()`).
 
 **Main exports:** `AudioFormat`, `SessionCallbacks`, `VoiceSession`.
 
@@ -131,7 +146,12 @@ loaded settings). If the Live session fails to start (socket error, close
 before `session.started`, or start timeout) it is aborted and the call is
 answered by `CallSession` instead, so a caller never hears silence.
 
-**Main exports:** `startCallSession(projectId, callerPhone, twilioCallSid, callbacks)`.
+The last argument `transport` (`"twilio"` or `"browser"`, default `"browser"`)
+decides the Standard audio format: a Twilio call uses `"pcmu"` (no conversion),
+unless the environment variable `TWILIO_STANDARD_AUDIO=pcm24` switches back to
+converting (a quick way back if the phone format ever sounds worse).
+
+**Main exports:** `startCallSession(projectId, callerPhone, twilioCallSid, callbacks, transport?)`.
 
 **Depends on:** `config.ts`, `session.ts`, `live-session.ts`,
 `session-types.ts`, `logger.ts`.
@@ -174,7 +194,13 @@ voice model only speaks; reasoning and tool calls are delegated to an OpenAI
 backend model. Tool calls arrive as `response.event` items and are run with
 the existing `executeTool`, then answered with `response.item.create` and
 `response.create`. `end_call` returns its result without continuing, then
-hangs up through a Twilio mark once no output audio has arrived for 1.2 s.
+hangs up through a Twilio mark once no speech has arrived for 1.2 s. Live
+streams audio all the time, silent frames between sentences included (measured,
+LEA-155), so only frames that are not digital silence (`isSilentMulaw`) count as
+speech, both for this timer and for the quality numbers. The caller's audio that
+arrives before `session.started` waits in an `InputBuffer`. Live has no event for
+"the caller started talking" and no truncate, so there is nothing to `clear`: its
+audio arrives in real time, so almost nothing is queued at the phone line.
 Transcript deltas are accumulated and, together with the tool calls, handed to
 the shared `CallLogger`; `end()`/`end_call` finalize exactly once (summary, SMS,
 email, `calls` row). `abort()` closes the socket without finalizing (used for
@@ -356,8 +382,9 @@ drive it.
 **Main exports:** `CallQualityTracker` (`assistantAudio`, `playbackCleared`,
 `callerSpeechStarted/Stopped`, `callerTranscribed` for Standard,
 `callerTextDelta` for Live, `toolStarted/Finished`, `disconnected`,
-`markFallback`, `finish`), `audioDurationMs`, `toolResultFailed`,
-`QualityStats`, constants `DEAD_AIR_MS`, `SLOW_TOOL_MS`.
+`markFallback`, `inboundFrame` (line gaps and loudness, LEA-155), `finish`),
+`audioDurationMs`, `toolResultFailed`, `QualityStats` (also `first_audio_ms`,
+`inbound_gaps`, `caller_dbfs`), constants `DEAD_AIR_MS`, `SLOW_TOOL_MS`.
 
 **How it is wired:** `session.ts` and `live-session.ts` each own a tracker whose
 `emit` calls `CallLogger.logEvent("quality.*", "system", payload)`. At the end of
@@ -385,22 +412,55 @@ Twilio Voice/SIP call path itself.
 
 ## audio.ts
 
-**Purpose:** Pure audio codec/resampling functions bridging Twilio's
-8kHz μ-law format and OpenAI Realtime's 24kHz PCM16 format — no I/O, no
-side effects. Includes μ-law encode/decode, naive linear-interpolation
-resampling (3× up/down, since 8kHz × 3 = 24kHz exactly), and the two
-end-to-end pipeline functions used elsewhere.
+**Purpose:** Pure audio functions, no I/O: mu-law encode/decode, and the
+conversion between the phone line (mu-law 8 kHz) and PCM16 24 kHz. Since LEA-155
+the conversion is a low-pass-filtered `Upsampler` and `Downsampler` (Blackman
+sinc, 72 taps, cut at 3.8 kHz) that keep their filter memory between 20 ms
+chunks, so nothing above 4 kHz folds back into the voice (the old version dropped
+every third sample without a filter) and chunks join without clicks.
+`TelephonyConverter` holds one pair per connection (`toOpenAI`, `toPhone`). Also
+`isSilentMulaw` (digital silence, used for Live's silent frames) and
+`mulawLevelDbfs` (loudness of a frame, used for the line-quality numbers).
 
-**Main exports:** `twilioAudioToOpenAI(mulawB64)`,
-`openAIAudioToTwilio(pcm24B64)` (the two pipelines actually used by
-callers), plus the lower-level `mulawToLinear`, `linearToMulaw`,
-`upsample8kTo24k`, `downsample24kTo8k`, `pcm8kToFloat32`,
-`float32ToPcm8k`, `pcm24kToBase64`, `base64ToPcm24k`.
+A Twilio call with the Standard engine no longer converts at all (audio format
+`pcmu` with OpenAI); the converter is used by the browser test call with Live, and
+by Twilio calls only when `TWILIO_STANDARD_AUDIO=pcm24`.
+
+**Main exports:** `TelephonyConverter`, `Upsampler`, `Downsampler`,
+`mulawToLinear`, `linearToMulaw`, `pcm8kToFloat32`, `float32ToPcm8k`,
+`pcm24kToBase64`, `base64ToPcm24k`, `isSilentMulaw`, `mulawLevelDbfs`.
 
 **Depends on:** nothing.
 
-**Depended on by:** `handlers/twilio.ts` (both pipeline functions, per
-audio frame in each direction).
+**Depended on by:** `handlers/twilio.ts`, `handlers/browser.ts`,
+`live-session.ts`.
+
+## playback-clock.ts (LEA-155)
+
+**Purpose:** `PlaybackClock` models the queue of speech at the phone line:
+every chunk sent adds its playing time, time moving on plays it. It answers
+`audible()` (more than 200 ms of queued speech left), `remainingMs()` and
+`playing()` (which item is playing now and how many ms of it were heard, for
+`conversation.item.truncate`). `clear()` forgets everything after an interruption.
+Time is injectable for tests.
+
+**Depended on by:** `session.ts`.
+
+## input-buffer.ts (LEA-155)
+
+**Purpose:** `InputBuffer` keeps the newest 75 frames (1.5 s) of the caller's
+audio between "the call connected" and "the assistant is ready to listen", then
+`drain()` hands them over in order. Used by `handlers/twilio.ts` (until the
+session exists) and by both sessions (until OpenAI accepts the settings).
+
+## scripts/phone-sim.ts (LEA-155)
+
+**Purpose:** a developer tool, not run in production. It runs the real Standard
+session against OpenAI with a fake Twilio line that plays the caller from raw
+mu-law files and keeps a queue of what has been sent but not played, so it can
+report what a `clear` cut. Scenarios: `interrupt` (speech over the assistant),
+`noise`, `ding`, `short`. Needs `OPENAI_API_KEY` in the environment; usage is in
+the file's header.
 
 ## logger.ts
 
@@ -453,15 +513,19 @@ callback (`handleRecordingStatusCallback` — patches the `calls` row with
 the final recording URL once Twilio finishes processing it), and the
 Media Stream WebSocket handler itself (`handleTwilioConnection` — parses
 `start`/`media`/`stop` frames, starts a session through
-`session-factory.ts` on `start`, feeds audio through `audio.ts`'s codec
-functions only when the session expects PCM 24 kHz (Live takes mu-law as is),
-and ends the session on `stop`/close).
+`session-factory.ts` on `start`, feeds audio through `audio.ts`'s
+`TelephonyConverter` only when the session expects PCM 24 kHz (Live and the
+Standard `pcmu` mode take mu-law as is), keeps the audio that arrives before the
+session is ready in an `InputBuffer`, reports each inbound frame's Twilio
+timestamp and loudness to the session for the line-quality numbers, sends the
+Twilio `clear` event when a session asks for it, and ends the session on
+`stop`/close).
 
 **Main exports:** `handleTwilioVoiceWebhook`, `handleRecordingStatusCallback`,
 `handleTwilioConnection`.
 
 **Depends on:** `session-factory.ts` (`startCallSession`), `session-types.ts`,
-`logger.ts`, `audio.ts` (`twilioAudioToOpenAI`, `openAIAudioToTwilio`), `config.ts`
+`logger.ts`, `audio.ts` (`TelephonyConverter`, `mulawLevelDbfs`), `input-buffer.ts`, `config.ts`
 (`getSupabaseUrl`, `getSupabaseHeaders`), the `twilio` npm package (request
 signature validation only).
 
@@ -474,14 +538,16 @@ signature validation only).
 QR code in the dashboard and talks to the assistant from the phone page `/t/<token>`.
 Same `CallSession` wiring as the Twilio handler, but audio is exchanged as raw
 PCM24 JSON messages instead of Twilio's μ-law media-stream format, so no
-`audio.ts` codec conversion is needed here. It only accepts `?ticket=`, a
+`audio.ts` codec conversion is needed for the Standard engine. It only accepts `?ticket=`, a
 one-time ticket signed by the dashboard with `ENGINE_INTERNAL_SECRET`
 (`test-call-ticket.ts`): project, the phone number the owner typed (used as the
 caller number) and the time limit (600 s, with a warning event 60 s before) come from the ticket. At most
 `MAX_CONCURRENT_TEST_CALLS` (10) run at once. Test calls are recognised by
 having no Twilio call SID; they never SMS the typed number. The call runs the same
 engine as a real one (`startCallSession`: Standard or Live); Live speaks 8 kHz
-mu-law, so the browser's 24 kHz audio is converted both ways (`audio.ts`).
+mu-law, so the browser's 24 kHz audio is converted both ways (`TelephonyConverter`
+in `audio.ts`). The page stops playing on the engine's `engine.clear_audio` event
+(`proxy.connected` carries `barge_in: "engine"`).
 
 **Main exports:** `handleBrowserConnection`.
 

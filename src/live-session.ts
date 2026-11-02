@@ -16,6 +16,8 @@ import {
 import { formatOwnerSms } from "./session";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 import { CallQualityTracker, audioDurationMs, toolResultFailed } from "./quality-tracker";
+import { InputBuffer } from "./input-buffer";
+import { isSilentMulaw } from "./audio";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
 import { bookingMadeFromResult, bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
 import { fetchOwnerBookingBlock } from "./owner-booking-block";
@@ -75,6 +77,8 @@ export class LiveCallSession implements VoiceSession {
   private markStarted: (() => void) | null = null;
   private failStart: ((err: Error) => void) | null = null;
   private promptSnapshot: PromptSnapshot = emptySnapshot();
+  // The caller's first words arrive before Live has started; they wait here instead of being dropped (LEA-155).
+  private readonly inputBuffer = new InputBuffer();
 
   constructor(
     private readonly settings: AssistantSettings | null,
@@ -152,8 +156,15 @@ export class LiveCallSession implements VoiceSession {
   }
 
   handleClientAudio(mulawBase64: string): void {
-    if (!this.started) return;
+    if (!this.started) {
+      this.inputBuffer.push(mulawBase64);
+      return;
+    }
     this.send({ type: "session.input_audio.append", audio: mulawBase64 });
+  }
+
+  noteInboundFrame(timestampMs: number, levelDbfs: number): void {
+    this.quality.inboundFrame(timestampMs, levelDbfs);
   }
 
   handleTwilioMark(name: string): void {
@@ -211,9 +222,12 @@ export class LiveCallSession implements VoiceSession {
         this.firstAudioLogged = true;
         logger.info("first assistant audio sent to caller", { ms_since_session_ready: Date.now() - this.readyAt });
       }
-      this.quality.assistantAudio(audioDurationMs(String(msg["delta"] ?? ""), "mulaw8"));
+      // Live streams audio all the time, silent frames between sentences included (measured, LEA-155). Only real speech
+      // counts as the assistant talking, for the quality numbers and for the "goodbye has gone quiet" hang-up timer.
+      const speech = !isSilentMulaw(String(msg["delta"] ?? ""));
+      if (speech) this.quality.assistantAudio(audioDurationMs(String(msg["delta"] ?? ""), "mulaw8"));
       this.callbacks.sendAudio(msg["delta"] as string, "mulaw8");
-      if (this.hangupRequested) this.armHangupTimer();
+      if (speech && this.hangupRequested) this.armHangupTimer();
       return;
     }
 
@@ -223,6 +237,7 @@ export class LiveCallSession implements VoiceSession {
     if (type === "session.started") {
       this.started = true;
       this.readyAt = Date.now();
+      for (const frame of this.inputBuffer.drain()) this.send({ type: "session.input_audio.append", audio: frame });
       this.markStarted?.();
       return;
     }

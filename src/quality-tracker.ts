@@ -16,6 +16,12 @@ export interface QualityStats {
   disconnects: number;
   /** The call started on Standard because Live could not start. */
   fallback: boolean;
+  /** Milliseconds from the start of the call to the first sound of the assistant (null: it never spoke). */
+  first_audio_ms: number | null;
+  /** Times the caller's audio stopped arriving for 100 ms or more (a bad line, packet loss). */
+  inbound_gaps: number;
+  /** Average loudness of the caller's audio in dB below full scale, over the frames with sound (null: none). */
+  caller_dbfs: number | null;
 }
 
 export type QualityEmit = (eventType: string, payload: Record<string, unknown>) => void;
@@ -24,6 +30,10 @@ export const DEAD_AIR_MS = 5000;
 export const SLOW_TOOL_MS = 3000;
 // The assistant counts as still audible until this long before its queued audio runs out.
 const OVERLAP_MARGIN_MS = 200;
+// Audio frames below this loudness are line noise or silence and do not count towards the caller's level.
+const SOUND_FLOOR_DBFS = -55;
+// The caller's audio normally arrives every 20 ms; this much later counts as a gap in the line.
+const INBOUND_GAP_MS = 100;
 // Live has no "caller started speaking" event: a transcript delta after this long without one starts a new utterance.
 const NEW_UTTERANCE_GAP_MS = 1500;
 
@@ -42,7 +52,12 @@ export function toolResultFailed(result: unknown): boolean {
 export class CallQualityTracker {
   private stats: QualityStats = {
     interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, fallback: false,
+    first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
   };
+  private readonly startedAt: number;
+  private lastInboundTimestamp: number | null = null;
+  private levelSum = 0;
+  private levelCount = 0;
   // When the audio already sent to the caller runs out (the model streams faster than real time).
   private playbackEndsAt = 0;
   private lastActivityAt: number | null = null;
@@ -52,15 +67,34 @@ export class CallQualityTracker {
   private segments: number[] = [];
   private finished = false;
 
-  constructor(private readonly emit: QualityEmit, private readonly now: () => number = Date.now) {}
+  constructor(private readonly emit: QualityEmit, private readonly now: () => number = Date.now) {
+    this.startedAt = now();
+  }
 
   /** Audio from the assistant arrived; `durationMs` is how long it plays. */
   assistantAudio(durationMs: number): void {
     this.safely(() => {
       const t = this.now();
+      if (this.stats.first_audio_ms === null) this.stats.first_audio_ms = t - this.startedAt;
       this.closeGap(t);
       this.playbackEndsAt = Math.max(t, this.playbackEndsAt) + durationMs;
       this.lastActivityAt = this.playbackEndsAt;
+    });
+  }
+
+  /**
+   * One frame of the caller's audio arrived from the phone line. `timestampMs` is the line's own clock (Twilio's media
+   * timestamp), so a jump means audio really went missing; `levelDbfs` is the frame's loudness.
+   */
+  inboundFrame(timestampMs: number, levelDbfs: number): void {
+    this.safely(() => {
+      const prev = this.lastInboundTimestamp;
+      this.lastInboundTimestamp = timestampMs;
+      if (prev !== null && timestampMs - prev >= INBOUND_GAP_MS) this.stats.inbound_gaps++;
+      if (levelDbfs > SOUND_FLOOR_DBFS) {
+        this.levelSum += levelDbfs;
+        this.levelCount++;
+      }
     });
   }
 
@@ -165,7 +199,10 @@ export class CallQualityTracker {
       this.finished = true;
       this.closeGap(this.now());
     });
-    return { ...this.stats };
+    return {
+      ...this.stats,
+      caller_dbfs: this.levelCount > 0 ? Math.round(this.levelSum / this.levelCount) : null,
+    };
   }
 
   private assistantAudible(t: number): boolean {

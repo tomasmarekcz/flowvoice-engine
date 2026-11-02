@@ -112,3 +112,43 @@ describe("Twilio handler session wiring", () => {
     await vi.waitFor(() => expect(session.end).toHaveBeenCalled());
   });
 });
+
+describe("Twilio handler: the first words, the queue and the line", () => {
+  it("starts the session as a phone call", async () => {
+    await connect("mulaw8");
+    expect(h.startCallSession.mock.calls[0][4]).toBe("twilio");
+  });
+
+  it("keeps audio that arrives while the session is starting and feeds it in order once it is ready", async () => {
+    const socket = new FakeTwilioSocket();
+    const session = fakeSession("mulaw8");
+    let release!: () => void;
+    h.startCallSession.mockReturnValue(new Promise((resolve) => { release = () => resolve(session); }));
+
+    await handleTwilioConnection(socket as unknown as WS, {} as IncomingMessage);
+    socket.says({ event: "start", streamSid: "MZ1", start: { customParameters: { project_id: "p", caller_phone: "+420111", call_sid: "CA1" } } });
+    await vi.waitFor(() => expect(h.startCallSession).toHaveBeenCalledOnce());
+    socket.says({ event: "media", media: { payload: "AAAA", timestamp: "20" } });
+    socket.says({ event: "media", media: { payload: "BBBB", timestamp: "40" } });
+    expect(session.handleClientAudio).not.toHaveBeenCalled();
+
+    release();
+    await vi.waitFor(() => expect(session.handleClientAudio).toHaveBeenCalledTimes(2));
+    expect(session.handleClientAudio.mock.calls.map((c) => c[0])).toEqual(["AAAA", "BBBB"]);
+  });
+
+  it("empties Twilio's queue with a clear event for the stream", async () => {
+    const { socket, callbacks } = await connect("mulaw8");
+    (callbacks as unknown as { clearAudio: () => void }).clearAudio();
+    expect(socket.sent).toContainEqual({ event: "clear", streamSid: "MZ1" });
+  });
+
+  it("reports each inbound frame's Twilio timestamp and loudness for the line-quality numbers", async () => {
+    const { socket, session } = await connect("mulaw8");
+    const noteInboundFrame = vi.fn();
+    (session as unknown as { noteInboundFrame: typeof noteInboundFrame }).noteInboundFrame = noteInboundFrame;
+    socket.says({ event: "media", media: { payload: mulawPayload, timestamp: "60" } });
+    expect(noteInboundFrame).toHaveBeenCalledWith(60, expect.any(Number));
+    expect(noteInboundFrame.mock.calls[0][1]).toBeGreaterThan(-60);
+  });
+});

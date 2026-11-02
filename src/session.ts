@@ -12,8 +12,10 @@ import { bookingMadeFromResult, bookingsForSummary, callerSmsWithConfirmation, c
 import { fetchOwnerBookingBlock, type OwnerBookingBlock } from "./owner-booking-block";
 import { planTestCallNotifications } from "./test-call";
 import { refreshExternalCalendars } from "./ical-refresh";
-import type { SessionCallbacks, VoiceSession } from "./session-types";
+import type { AudioFormat, SessionCallbacks, VoiceSession } from "./session-types";
 import { CallQualityTracker, audioDurationMs, toolResultFailed } from "./quality-tracker";
+import { PlaybackClock } from "./playback-clock";
+import { InputBuffer } from "./input-buffer";
 
 export function formatOwnerSms(
   rawSummary: string,
@@ -43,8 +45,15 @@ export type { SessionCallbacks } from "./session-types";
 // playing (e.g. a dropped Twilio WS event), don't leave the call hanging open.
 const END_CALL_MARK_FALLBACK_MS = 15000;
 
+export interface CallSessionOptions {
+  /** Set by the session factory when Live could not start and this call runs on Standard instead (LEA-154). */
+  fallbackReason?: string;
+  /** Audio format spoken with OpenAI: "pcmu" = the phone line's own format, no conversion (LEA-155); default PCM 24 kHz. */
+  audio?: "pcmu" | "pcm24";
+}
+
 export class CallSession implements VoiceSession {
-  readonly audioFormat = "pcm24" as const;
+  readonly audioFormat: AudioFormat;
   private projectId: string | null;
   private callerPhone: string | null;
   private twilioCallSid: string | null;
@@ -62,6 +71,12 @@ export class CallSession implements VoiceSession {
   private promptSnapshot: PromptSnapshot = emptySnapshot();
   private pendingEndCallMark: string | null = null;
   private endCallFallbackTimer: NodeJS.Timeout | null = null;
+  // What the caller has heard, and the barge-in state (LEA-155).
+  private readonly clock = new PlaybackClock();
+  private dropAudio = false;
+  // The caller's audio waits here until OpenAI has accepted the session settings (its default format is not ours).
+  private readonly inputBuffer = new InputBuffer();
+  private listening = false;
   private usageAccum = {
     realtimeAudioIn: 0, realtimeAudioOut: 0,
     realtimeTextIn: 0,  realtimeTextOut: 0,
@@ -75,9 +90,9 @@ export class CallSession implements VoiceSession {
     callbacks: SessionCallbacks,
     private preloadedSettings?: AssistantSettings | null,
     private preloadedSnapshot?: PromptSnapshot,
-    // Set by the session factory when Live could not start and this call runs on Standard instead (LEA-154).
-    private fallbackReason?: string
+    private readonly options: CallSessionOptions = {}
   ) {
+    this.audioFormat = options.audio === "pcmu" ? "mulaw8" : "pcm24";
     this.projectId = projectId;
     this.callerPhone = callerPhone;
     this.twilioCallSid = twilioCallSid;
@@ -91,14 +106,15 @@ export class CallSession implements VoiceSession {
 
     refreshExternalCalendars(this.projectId); // in the background, while the assistant greets (LEA-139)
 
+    // The call row is written while the connection to OpenAI is being made, not before it (LEA-155).
+    const callCreated = this.logger.createCall(this.callerPhone);
     const [settings, promptSnapshot] = await Promise.all([
       this.preloadedSettings !== undefined ? this.preloadedSettings : loadAssistantSettings(this.projectId),
       this.preloadedSnapshot ?? getSnapshot(),
-      this.logger.createCall(this.callerPhone),
     ]);
     // One snapshot of the editable prompts for the whole call (LEA-63); falls back to the code defaults on any problem.
     this.promptSnapshot = promptSnapshot;
-    if (this.fallbackReason) this.quality.markFallback(this.fallbackReason);
+    if (this.options.fallbackReason) callCreated.then(() => this.quality.markFallback(this.options.fallbackReason!));
 
     this.settings = settings;
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
@@ -109,6 +125,7 @@ export class CallSession implements VoiceSession {
     const voice = settings?.voice ?? "alloy";
 
     this.logger.openaiPayload = { model: "gpt-realtime-2", voice, instructions, tools };
+    const audioFormat = this.options.audio === "pcmu" ? { type: "audio/pcmu" } : { type: "audio/pcm", rate: 24000 };
 
     logger.info("connecting to OpenAI", { project_id: this.projectId ?? "none" });
 
@@ -129,7 +146,7 @@ export class CallSession implements VoiceSession {
           tool_choice: tools.length > 0 ? "auto" : "none",
           audio: {
             input: {
-              format: { type: "audio/pcm", rate: 24000 },
+              format: audioFormat,
               transcription: { model: "gpt-4o-transcribe" },
               // Filters background noise (a TV, the street) before it can count as speech and cut the assistant off.
               noise_reduction: { type: "near_field" },
@@ -140,15 +157,18 @@ export class CallSession implements VoiceSession {
                 silence_duration_ms: 400,
               },
             },
-            output: { format: { type: "audio/pcm", rate: 24000 }, voice },
+            output: { format: audioFormat, voice },
           },
         },
       }));
-      this.callbacks.sendJson({
+      // The call id exists once the row is written; the client is told then, with the connection already up.
+      callCreated.then(() => this.callbacks.sendJson({
         type: "proxy.connected",
         calendar_project_id: this.calendarProjectId,
         call_id: this.logger.callId,
-      });
+        // The engine tells the client when to stop playing (engine.clear_audio); it need not guess from speech_started.
+        barge_in: "engine",
+      }));
     }));
 
     openaiWs.on("message", bindToCurrentContext((data) => {
@@ -171,9 +191,22 @@ export class CallSession implements VoiceSession {
     }));
   }
 
-  handleClientAudio(pcm24Base64: string): void {
+  handleClientAudio(audioBase64: string): void {
+    if (!this.listening) {
+      // OpenAI has not accepted our audio format yet: keep the first words of the caller instead of losing them.
+      this.inputBuffer.push(audioBase64);
+      return;
+    }
+    this.sendInputAudio(audioBase64);
+  }
+
+  private sendInputAudio(audioBase64: string): void {
     if (this.openaiWs?.readyState !== WebSocket.OPEN) return;
-    this.openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm24Base64 }));
+    this.openaiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: audioBase64 }));
+  }
+
+  noteInboundFrame(timestampMs: number, levelDbfs: number): void {
+    this.quality.inboundFrame(timestampMs, levelDbfs);
   }
 
   handleClientEvent(msg: Record<string, unknown>): void {
@@ -311,11 +344,25 @@ export class CallSession implements VoiceSession {
 
     const type = msg["type"] as string;
 
+    // The assistant's speech is dropped after a barge-in: what OpenAI had already sent must not reach the caller.
+    if (type === "response.output_audio.delta") {
+      if (this.dropAudio) return;
+      const format = this.audioFormat === "mulaw8" ? "mulaw8" : "pcm24";
+      const ms = audioDurationMs(String(msg["delta"] ?? ""), format);
+      this.clock.audio(String(msg["item_id"] ?? ""), ms);
+      this.quality.assistantAudio(ms);
+      this.logger.handleOpenAIEvent(msg);
+      this.callbacks.sendAudio(msg["delta"] as string, format);
+      return;
+    }
+
     if (type === "error") {
       logger.error("OpenAI error event", { event: "openai.error_event", detail: JSON.stringify(msg) });
-    } else if (type !== "response.output_audio.delta") {
+    } else {
       logger.debug("← openai event", { type });
     }
+
+    if (type === "response.created") this.dropAudio = false; // a new answer: its speech is wanted again
 
     if (type === "response.done") {
       const response = msg["response"] as Record<string, unknown> | undefined;
@@ -339,6 +386,12 @@ export class CallSession implements VoiceSession {
       }
     }
 
+    if (type === "session.updated" && !this.listening) {
+      // OpenAI now speaks our audio format: release what the caller said while it was being set up.
+      this.listening = true;
+      for (const frame of this.inputBuffer.drain()) this.sendInputAudio(frame);
+    }
+
     if (type === "session.updated" && this.settings?.greeting_enabled && this.settings?.greeting_message?.trim()) {
       logger.info("triggering greeting response");
       if (this.openaiWs?.readyState === WebSocket.OPEN) {
@@ -346,13 +399,10 @@ export class CallSession implements VoiceSession {
       }
     }
 
+    // The quality measurement sees the interruption first (it needs the assistant still audible); then the queue is emptied.
     this.trackQuality(type, msg);
+    if (type === "input_audio_buffer.speech_started" && this.clock.audible()) this.bargeIn();
     this.logger.handleOpenAIEvent(msg);
-
-    if (type === "response.output_audio.delta") {
-      this.callbacks.sendAudio(msg["delta"] as string);
-      return;
-    }
 
     this.callbacks.sendJson(msg);
 
@@ -367,10 +417,38 @@ export class CallSession implements VoiceSession {
 
   // Feeds the quality measurement (LEA-154) from the events OpenAI already sends; it never changes the call.
   private trackQuality(type: string, msg: Record<string, unknown>): void {
-    if (type === "response.output_audio.delta") this.quality.assistantAudio(audioDurationMs(String(msg["delta"] ?? ""), "pcm24"));
-    else if (type === "input_audio_buffer.speech_started") this.quality.callerSpeechStarted();
+    if (type === "input_audio_buffer.speech_started") this.quality.callerSpeechStarted();
     else if (type === "input_audio_buffer.speech_stopped") this.quality.callerSpeechStopped();
     else if (type === "conversation.item.input_audio_transcription.completed") this.quality.callerTranscribed(String(msg["transcript"] ?? ""));
+  }
+
+  // ─── Barge-in (LEA-155) ─────────────────────────────────────────────────────────
+  // OpenAI streams speech several times faster than real time, so the phone line holds seconds of it that the caller
+  // has not heard yet. When the caller starts talking, that queue must be emptied and OpenAI told how much of the
+  // answer was actually heard, otherwise the assistant keeps talking and later "remembers" saying words nobody heard.
+  // OpenAI's own speech detection already ignores a ding or street noise (measured, LEA-155), so the first real speech is enough.
+
+  private bargeIn(): void {
+    const playing = this.clock.playing();
+    const queuedMs = this.clock.remainingMs();
+    const ws = this.openaiWs;
+    // OpenAI cancels the answer itself when the caller starts talking; it only needs to be told how much was heard.
+    if (ws?.readyState === WebSocket.OPEN) {
+      if (playing && playing.itemId) {
+        ws.send(JSON.stringify({
+          type: "conversation.item.truncate",
+          item_id: playing.itemId,
+          content_index: 0,
+          audio_end_ms: playing.playedMs,
+        }));
+      }
+    }
+    this.callbacks.clearAudio?.();
+    this.callbacks.sendJson({ type: "engine.clear_audio" });
+    this.clock.clear();
+    this.quality.playbackCleared();
+    this.dropAudio = true;
+    logger.info("caller interrupted the assistant", { event: "call.barge_in", played_ms: playing?.playedMs ?? 0, unheard_ms: queuedMs });
   }
 
   private async executeToolCall(name: string, argsJson: string, callId: string): Promise<void> {

@@ -6,6 +6,8 @@ export interface SessionCallbacks {
   sendJson: (obj: unknown) => void;
   sendMark: (name: string) => void;
   endCall: () => void;
+  // Empty the phone line's queue of audio not played yet (a Twilio "clear"). Absent where the client does it itself.
+  clearAudio?: () => void;
 }
 
 export interface VoiceSession {
@@ -16,5 +18,7 @@ export interface VoiceSession {
   handleTwilioMark(name: string): void;
   // Other client messages (browser test call only); the Live session has none.
   handleClientEvent?(msg: Record<string, unknown>): void;
+  // The line's own clock (Twilio's media timestamp, ms) and loudness of one inbound frame, for the line-quality numbers.
+  noteInboundFrame?(timestampMs: number, levelDbfs: number): void;
   end(): Promise<void>;
 }

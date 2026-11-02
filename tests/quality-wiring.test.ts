@@ -109,10 +109,10 @@ describe("Standard session quality", () => {
   });
 
   it("records that the call started on Standard because Live failed", async () => {
-    const session = new CallSession("proj-1", null, null, callbacks(), settings, undefined, "live timed out");
+    const session = new CallSession("proj-1", null, null, callbacks(), settings, undefined, { fallbackReason: "live timed out" });
     await session.start();
 
-    expect(events).toContainEqual(["quality.engine_fallback", { reason: "live timed out" }]);
+    await vi.waitFor(() => expect(events).toContainEqual(["quality.engine_fallback", { reason: "live timed out" }]));
     await session.end();
     expect(saved[0]).toMatchObject({ fallback: true });
   });
@@ -149,6 +149,15 @@ describe("Live session quality", () => {
 
     await session.end();
     expect(saved[0]).toMatchObject({ interruptions: 1 });
+  });
+
+  it("does not count Live's silent frames as the assistant talking, so a caller after a sentence is no interruption (LEA-155)", async () => {
+    const { session, socket } = await startLive();
+    socket.serverSays({ type: "session.output_audio.delta", delta: Buffer.alloc(800, 0xff).toString("base64") });
+    socket.serverSays({ type: "session.output_audio.delta", delta: Buffer.alloc(800, 0xff).toString("base64") });
+    socket.serverSays({ type: "session.input_transcript.delta", delta: "Dobrý den" });
+    await session.end();
+    expect(saved[0]).toMatchObject({ interruptions: 0 });
   });
 
   it("records a tool that came back with an error", async () => {

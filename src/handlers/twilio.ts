@@ -6,7 +6,8 @@ import type { AudioFormat, VoiceSession } from "../session-types";
 import { randomUUID } from "node:crypto";
 import { logger } from "../logger";
 import { createLogContext } from "../log/context";
-import { twilioAudioToOpenAI, openAIAudioToTwilio } from "../audio";
+import { TelephonyConverter, mulawLevelDbfs } from "../audio";
+import { InputBuffer } from "../input-buffer";
 import { getSupabaseUrl, getSupabaseHeaders, loadAssistantSettings } from "../config";
 import { checkCallEligibility } from "../billing";
 import { decideCallRouting } from "../call-routing";
@@ -251,6 +252,12 @@ export async function handleTwilioConnection(
 ): Promise<void> {
   let streamSid: string | null = null;
   let session: VoiceSession | null = null;
+  // Audio that arrives before the session is ready is kept, not lost (LEA-155). Conversion keeps filter state per call.
+  const early = new InputBuffer();
+  const converter = new TelephonyConverter();
+  const feed = (live: VoiceSession, payload: string): void => {
+    live.handleClientAudio(live.audioFormat === "mulaw8" ? payload : converter.toOpenAI(payload));
+  };
 
   // WebSocket callbacks do not inherit async context, so every listener below is bound to this one.
   const logCtx = createLogContext({ request_id: randomUUID() });
@@ -291,8 +298,13 @@ export async function handleTwilioConnection(
           ws.send(JSON.stringify({
             event: "media",
             streamSid: capturedStreamSid,
-            media: { payload: format === "mulaw8" ? audio : openAIAudioToTwilio(audio) },
+            media: { payload: format === "mulaw8" ? audio : converter.toPhone(audio) },
           }));
+        },
+        // The caller interrupted: drop what Twilio has queued but not played yet.
+        clearAudio: () => {
+          if (!capturedStreamSid || ws.readyState !== WS.OPEN) return;
+          ws.send(JSON.stringify({ event: "clear", streamSid: capturedStreamSid }));
         },
         sendJson: (obj: unknown) => {
           const typed = obj as Record<string, unknown>;
@@ -309,8 +321,9 @@ export async function handleTwilioConnection(
       };
 
       try {
-        const started = await startCallSession(projectId, callerPhone, callSid, callbacks);
+        const started = await startCallSession(projectId, callerPhone, callSid, callbacks, "twilio");
         session = started;
+        for (const payload of early.drain()) feed(started, payload);
         if (ws.readyState !== WS.OPEN) {
           // The caller hung up while the session was starting.
           await started.end().catch((e) => logger.error("session.end error", { err: e }));
@@ -323,9 +336,12 @@ export async function handleTwilioConnection(
     }
 
     if (event === "media") {
-      if (!session) return;
-      const payload = (msg["media"] as Record<string, string>)["payload"];
-      session.handleClientAudio(session.audioFormat === "mulaw8" ? payload : twilioAudioToOpenAI(payload));
+      const media = msg["media"] as Record<string, string>;
+      const payload = media["payload"];
+      if (!session) { early.push(payload); return; }
+      const timestamp = Number(media["timestamp"]);
+      if (Number.isFinite(timestamp)) session.noteInboundFrame?.(timestamp, mulawLevelDbfs(payload));
+      feed(session, payload);
       return;
     }
 

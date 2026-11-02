@@ -23,24 +23,82 @@ export function linearToMulaw(sample: number): number {
   return (~(sign | (exp << 4) | mantissa)) & 0xFF;
 }
 
-// Linear interpolation upsample: 8kHz → 24kHz (3× factor)
-export function upsample8kTo24k(samples: Float32Array): Float32Array {
-  const out = new Float32Array(samples.length * 3);
-  for (let i = 0; i < samples.length; i++) {
-    const current = samples[i];
-    const next = samples[i + 1] ?? current;
-    out[i * 3] = current;
-    out[i * 3 + 1] = current + (next - current) / 3;
-    out[i * 3 + 2] = current + (2 * (next - current)) / 3;
+// ─── Sample-rate conversion (8 kHz phone line ↔ 24 kHz OpenAI) ─────────────────
+//
+// Both directions run a low-pass filter before the rate changes, so nothing above 4 kHz folds back into the voice
+// (aliasing, the harsh metallic sound of dropping samples), and they keep their filter memory between chunks, so
+// the 20 ms chunks join without clicks. One converter per call and direction: it holds state.
+
+const FACTOR = 3;
+const TAPS = 72; // 24 per phase; a Blackman-windowed sinc cut at 3.8 kHz
+const CUTOFF_HZ = 3800;
+const RATE_HZ = 24000;
+
+function lowPassKernel(): Float32Array {
+  const h = new Float32Array(TAPS);
+  const fc = CUTOFF_HZ / RATE_HZ;
+  const mid = (TAPS - 1) / 2;
+  let sum = 0;
+  for (let n = 0; n < TAPS; n++) {
+    const x = n - mid;
+    const sinc = x === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * x) / (Math.PI * x);
+    const w = 0.42 - 0.5 * Math.cos((2 * Math.PI * n) / (TAPS - 1)) + 0.08 * Math.cos((4 * Math.PI * n) / (TAPS - 1));
+    h[n] = sinc * w;
+    sum += h[n];
   }
-  return out;
+  for (let n = 0; n < TAPS; n++) h[n] /= sum; // unity gain at DC
+  return h;
 }
 
-// Downsample: 24kHz → 8kHz (take every 3rd sample)
-export function downsample24kTo8k(samples: Float32Array): Float32Array {
-  const out = new Float32Array(Math.floor(samples.length / 3));
-  for (let i = 0; i < out.length; i++) out[i] = samples[i * 3];
-  return out;
+const KERNEL = lowPassKernel();
+
+/** 8 kHz → 24 kHz. */
+export class Upsampler {
+  private history = new Float32Array(TAPS / FACTOR - 1);
+
+  process(input: Float32Array): Float32Array {
+    const per = TAPS / FACTOR;
+    const buf = new Float32Array(this.history.length + input.length);
+    buf.set(this.history);
+    buf.set(input, this.history.length);
+    const out = new Float32Array(input.length * FACTOR);
+    for (let n = 0; n < input.length; n++) {
+      const newest = this.history.length + n;
+      for (let phase = 0; phase < FACTOR; phase++) {
+        let acc = 0;
+        for (let i = 0; i < per; i++) acc += KERNEL[i * FACTOR + phase] * buf[newest - i];
+        out[n * FACTOR + phase] = acc * FACTOR;
+      }
+    }
+    this.history = buf.slice(buf.length - this.history.length);
+    return out;
+  }
+}
+
+/** 24 kHz → 8 kHz. */
+export class Downsampler {
+  private history = new Float32Array(TAPS - 1);
+  private consumed = 0; // input samples seen in earlier chunks
+  private nextOut = 0; // stream index of the next output sample (every third input sample)
+
+  process(input: Float32Array): Float32Array {
+    const buf = new Float32Array(this.history.length + input.length);
+    buf.set(this.history);
+    buf.set(input, this.history.length);
+    const out: number[] = [];
+    const end = this.consumed + input.length;
+    while (this.nextOut < end) {
+      // buf[p] is the newest sample of the filter window that ends at stream index nextOut.
+      const p = this.history.length + (this.nextOut - this.consumed);
+      let acc = 0;
+      for (let i = 0; i < TAPS; i++) acc += KERNEL[i] * buf[p - i];
+      out.push(acc);
+      this.nextOut += FACTOR;
+    }
+    this.consumed = end;
+    this.history = buf.slice(buf.length - this.history.length);
+    return Float32Array.from(out);
+  }
 }
 
 // Base64 μ-law 8kHz → float samples
@@ -78,12 +136,41 @@ export function base64ToPcm24k(b64: string): Float32Array {
   return out;
 }
 
-// Full pipeline: Twilio μ-law 8kHz base64 → OpenAI PCM16 24kHz base64
-export function twilioAudioToOpenAI(mulawB64: string): string {
-  return pcm24kToBase64(upsample8kTo24k(pcm8kToFloat32(mulawB64)));
+/** The two conversions between a phone line (μ-law 8 kHz) and OpenAI (PCM16 24 kHz) for ONE connection. */
+export class TelephonyConverter {
+  private readonly up = new Upsampler();
+  private readonly down = new Downsampler();
+
+  /** Phone line → OpenAI. */
+  toOpenAI(mulawB64: string): string {
+    return pcm24kToBase64(this.up.process(pcm8kToFloat32(mulawB64)));
+  }
+
+  /** OpenAI → phone line. */
+  toPhone(pcm24B64: string): string {
+    return float32ToPcm8k(this.down.process(base64ToPcm24k(pcm24B64)));
+  }
 }
 
-// Full pipeline: OpenAI PCM16 24kHz base64 → Twilio μ-law 8kHz base64
-export function openAIAudioToTwilio(pcm24B64: string): string {
-  return float32ToPcm8k(downsample24kTo8k(base64ToPcm24k(pcm24B64)));
+// ─── Looking at μ-law frames without converting them ──────────────────────────
+
+/** True when every byte of a μ-law chunk is digital silence (0xFF or 0x7F). */
+export function isSilentMulaw(mulawB64: string): boolean {
+  const buf = Buffer.from(mulawB64, "base64");
+  if (buf.length === 0) return true;
+  for (let i = 0; i < buf.length; i++) if (buf[i] !== 0xff && buf[i] !== 0x7f) return false;
+  return true;
+}
+
+/** Loudness of a μ-law chunk in dB relative to full scale (about -90 for near silence, 0 for a full-scale tone). */
+export function mulawLevelDbfs(mulawB64: string): number {
+  const buf = Buffer.from(mulawB64, "base64");
+  if (buf.length === 0) return -Infinity;
+  let energy = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const s = mulawToLinear(buf[i]) / 32768;
+    energy += s * s;
+  }
+  const rms = Math.sqrt(energy / buf.length);
+  return rms > 0 ? 20 * Math.log10(rms) : -Infinity;
 }
