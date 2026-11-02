@@ -13,6 +13,7 @@ import { fetchOwnerBookingBlock, type OwnerBookingBlock } from "./owner-booking-
 import { planTestCallNotifications } from "./test-call";
 import { refreshExternalCalendars } from "./ical-refresh";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
+import { CallQualityTracker, audioDurationMs, toolResultFailed } from "./quality-tracker";
 
 export function formatOwnerSms(
   rawSummary: string,
@@ -50,6 +51,7 @@ export class CallSession implements VoiceSession {
   private callbacks: SessionCallbacks;
   private openaiWs: WebSocket | null = null;
   private logger: CallLogger;
+  private quality = new CallQualityTracker((type, payload) => this.logger.logEvent(type, "system", payload));
   private calendarProjectId = "admin-test";
   // Appointments written as already confirmed during this call: the caller gets a confirmation after it (LEA-132).
   private confirmedBookings: ConfirmedBooking[] = [];
@@ -72,7 +74,9 @@ export class CallSession implements VoiceSession {
     twilioCallSid: string | null,
     callbacks: SessionCallbacks,
     private preloadedSettings?: AssistantSettings | null,
-    private preloadedSnapshot?: PromptSnapshot
+    private preloadedSnapshot?: PromptSnapshot,
+    // Set by the session factory when Live could not start and this call runs on Standard instead (LEA-154).
+    private fallbackReason?: string
   ) {
     this.projectId = projectId;
     this.callerPhone = callerPhone;
@@ -94,6 +98,7 @@ export class CallSession implements VoiceSession {
     ]);
     // One snapshot of the editable prompts for the whole call (LEA-63); falls back to the code defaults on any problem.
     this.promptSnapshot = promptSnapshot;
+    if (this.fallbackReason) this.quality.markFallback(this.fallbackReason);
 
     this.settings = settings;
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
@@ -155,6 +160,7 @@ export class CallSession implements VoiceSession {
     openaiWs.on("close", bindToCurrentContext((code) => {
       logger.warn("OpenAI disconnected", { event: "openai.closed", code });
       if (!this.ended) {
+        this.quality.disconnected(code);
         this.callbacks.sendJson({ type: "error", message: `OpenAI disconnected (code ${code})` });
       }
     }));
@@ -278,6 +284,7 @@ export class CallSession implements VoiceSession {
     };
 
     await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSmsFinal, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
+    await this.logger.saveQuality(this.quality.finish());
 
     // Send email notification if enabled
     if (plan.send && (plan.forceGenerate || this.settings?.email_owner_enabled) && emailOwner && this.logger.callId) {
@@ -339,6 +346,7 @@ export class CallSession implements VoiceSession {
       }
     }
 
+    this.trackQuality(type, msg);
     this.logger.handleOpenAIEvent(msg);
 
     if (type === "response.output_audio.delta") {
@@ -355,6 +363,14 @@ export class CallSession implements VoiceSession {
         msg["call_id"] as string
       );
     }
+  }
+
+  // Feeds the quality measurement (LEA-154) from the events OpenAI already sends; it never changes the call.
+  private trackQuality(type: string, msg: Record<string, unknown>): void {
+    if (type === "response.output_audio.delta") this.quality.assistantAudio(audioDurationMs(String(msg["delta"] ?? ""), "pcm24"));
+    else if (type === "input_audio_buffer.speech_started") this.quality.callerSpeechStarted();
+    else if (type === "input_audio_buffer.speech_stopped") this.quality.callerSpeechStopped();
+    else if (type === "conversation.item.input_audio_transcription.completed") this.quality.callerTranscribed(String(msg["transcript"] ?? ""));
   }
 
   private async executeToolCall(name: string, argsJson: string, callId: string): Promise<void> {
@@ -394,6 +410,7 @@ export class CallSession implements VoiceSession {
     }
 
     const t0 = Date.now();
+    this.quality.toolStarted();
     const knowledgeTopN = this.settings?.knowledge_top_n ?? 5;
     const { result, embeddingTokens } = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN, this.callerPhone);
     if (name === "create_calendar_event") {
@@ -402,6 +419,7 @@ export class CallSession implements VoiceSession {
       if (bookingMadeFromResult(result)) this.bookingMade = true;
     }
     this.usageAccum.searchEmbedding += embeddingTokens;
+    this.quality.toolFinished(name, Date.now() - t0, toolResultFailed(result));
     logger.info("tool executed", { name, duration_ms: Date.now() - t0 });
 
     this.callbacks.sendJson({ type: "engine.tool_done", name });

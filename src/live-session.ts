@@ -15,6 +15,7 @@ import {
 } from "./live-protocol";
 import { formatOwnerSms } from "./session";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
+import { CallQualityTracker, audioDurationMs, toolResultFailed } from "./quality-tracker";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
 import { bookingMadeFromResult, bookingsForSummary, callerSmsWithConfirmation, confirmedBookingFromResult, type ConfirmedBooking } from "./booking-confirmation";
 import { fetchOwnerBookingBlock } from "./owner-booking-block";
@@ -49,6 +50,7 @@ export class LiveCallSession implements VoiceSession {
 
   private ws: WebSocket | null = null;
   private readonly logger: CallLogger;
+  private readonly quality = new CallQualityTracker((type, payload) => this.logger.logEvent(type, "system", payload));
   private readonly transcript = new TranscriptAccumulator();
   private readonly connect: (url: string, apiKey: string) => WebSocket;
   private readonly runTool: typeof defaultExecuteTool;
@@ -124,6 +126,7 @@ export class LiveCallSession implements VoiceSession {
       this.failStart?.(new Error(`OpenAI Live closed before start (code ${code})`));
       logger.warn("OpenAI Live disconnected", { event: "openai.closed", code });
       if (!this.ended) {
+        this.quality.disconnected(code);
         this.callbacks.sendJson({ type: "error", message: `OpenAI Live disconnected (code ${code})` });
       }
     }));
@@ -208,6 +211,7 @@ export class LiveCallSession implements VoiceSession {
         this.firstAudioLogged = true;
         logger.info("first assistant audio sent to caller", { ms_since_session_ready: Date.now() - this.readyAt });
       }
+      this.quality.assistantAudio(audioDurationMs(String(msg["delta"] ?? ""), "mulaw8"));
       this.callbacks.sendAudio(msg["delta"] as string, "mulaw8");
       if (this.hangupRequested) this.armHangupTimer();
       return;
@@ -225,6 +229,7 @@ export class LiveCallSession implements VoiceSession {
     if (type === "session.input_transcript.delta") {
       const delta = String(msg["delta"] ?? "");
       this.transcript.addDelta("user", delta);
+      this.quality.callerTextDelta(delta);
       if (delta.trim()) this.resumeIfCallerSpeaksAfterHangupRequest();
       return;
     }
@@ -267,6 +272,7 @@ export class LiveCallSession implements VoiceSession {
     }
 
     const t0 = Date.now();
+    this.quality.toolStarted();
     const { result, embeddingTokens } = await this.runTool(
       name,
       args,
@@ -277,6 +283,7 @@ export class LiveCallSession implements VoiceSession {
       this.callerPhone
     );
     this.embeddingTokens += embeddingTokens;
+    this.quality.toolFinished(name, Date.now() - t0, toolResultFailed(result));
     if (name === "create_calendar_event") {
       const booking = confirmedBookingFromResult(result);
       if (booking) this.confirmedBookings.push(booking);
@@ -426,6 +433,7 @@ export class LiveCallSession implements VoiceSession {
     };
 
     await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSmsFinal, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
+    await this.logger.saveQuality(this.quality.finish());
 
     if (plan.send && (plan.forceGenerate || this.settings?.email_owner_enabled) && emailOwner && this.logger.callId) {
       const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";

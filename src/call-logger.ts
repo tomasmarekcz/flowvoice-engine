@@ -4,6 +4,7 @@ import { logger } from "./logger";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P } from "./prompts/registry";
 import { setLogContext } from "./log/context";
+import type { QualityStats } from "./quality-tracker";
 
 export interface TranscriptEntry {
   role: "user" | "assistant";
@@ -187,6 +188,24 @@ export class CallLogger {
         });
         delete this.pending[callId];
       }
+    }
+  }
+
+  /**
+   * Quality totals (LEA-154) are written separately from finalizeCall on purpose: a database without the column yet
+   * (engine deployed before the migration) must not stop the call itself from being saved.
+   */
+  async saveQuality(stats: QualityStats): Promise<void> {
+    if (!this.enabled || !this.callId) return;
+    try {
+      const res = await fetch(`${getSupabaseUrl()}/rest/v1/calls?id=eq.${this.callId}`, {
+        method: "PATCH",
+        headers: { ...getSupabaseHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({ quality: stats }),
+      });
+      if (!res.ok) logger.warn("saveQuality rejected", { event: "call.quality_not_saved", status: res.status });
+    } catch (e) {
+      logger.error("saveQuality error", { err: e });
     }
   }
 

@@ -45,6 +45,7 @@ async function createSession(
   // The editable prompts are read once per call (LEA-63); they fall back to the code defaults on any problem.
   const [settings, promptSnapshot] = await Promise.all([loadAssistantSettings(projectId), getSnapshot()]);
 
+  let fallbackReason: string | undefined;
   if (settings?.voice_engine === "live") {
     const live = new LiveCallSession(settings, projectId, callerPhone, twilioCallSid, callbacks, { promptSnapshot });
     try {
@@ -56,10 +57,13 @@ async function createSession(
         err: e,
       });
       await live.abort();
+      fallbackReason = e instanceof Error ? e.message.slice(0, 120) : "live start failed";
     }
   }
 
-  const session = new CallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot);
+  const session = fallbackReason
+    ? new CallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot, fallbackReason)
+    : new CallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot);
   await session.start();
   return session;
 }

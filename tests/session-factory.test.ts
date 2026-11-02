@@ -74,7 +74,8 @@ describe("startCallSession", () => {
 
     expect(h.liveAbort).toHaveBeenCalledOnce();
     expect(session.audioFormat).toBe("pcm24");
-    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything());
+    // The reason travels with the call so the quality measurement can record the fallback (LEA-154).
+    expect(h.stdCtor).toHaveBeenCalledWith("proj-1", "+420111", "CA1", callbacks, settings, expect.anything(), "model not available");
     expect(h.stdStart).toHaveBeenCalledOnce();
   });
 });
