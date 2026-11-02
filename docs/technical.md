@@ -342,6 +342,34 @@ summary in/out, search embedding).
 
 **Depended on by:** `session.ts` (owns one `CallLogger` per call).
 
+## quality-tracker.ts (LEA-154)
+
+**Purpose:** `CallQualityTracker` counts what goes wrong during one call:
+interruptions (the caller speaks while queued assistant audio still plays),
+false triggers (speech detection fired, transcript empty), dead air (5 s or more
+without sound or a running tool), tool problems (error result or over 3 s),
+disconnects from OpenAI, and a start on Standard after Live failed. It only
+counts and reports through an `emit` callback and never throws, so measuring
+cannot affect a call. Time comes from an injected clock, which is how the tests
+drive it.
+
+**Main exports:** `CallQualityTracker` (`assistantAudio`, `playbackCleared`,
+`callerSpeechStarted/Stopped`, `callerTranscribed` for Standard,
+`callerTextDelta` for Live, `toolStarted/Finished`, `disconnected`,
+`markFallback`, `finish`), `audioDurationMs`, `toolResultFailed`,
+`QualityStats`, constants `DEAD_AIR_MS`, `SLOW_TOOL_MS`.
+
+**How it is wired:** `session.ts` and `live-session.ts` each own a tracker whose
+`emit` calls `CallLogger.logEvent("quality.*", "system", payload)`. At the end of
+the call `CallLogger.saveQuality()` writes the totals to `calls.quality` in its
+own request, after `finalizeCall()`, so an engine released before the migration
+still saves the call. `session-factory.ts` passes the reason to `CallSession`
+when Live failed to start.
+
+**Depends on:** `call-logger.ts`. **Depended on by:** `session.ts`,
+`live-session.ts`. Details and limits (including why Live interruptions are an
+estimate): the dashboard repo's `docs/features/call-quality-metrics.md`.
+
 ## sms.ts
 
 **Purpose:** Sends SMS notifications (to the business owner and/or the
