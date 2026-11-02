@@ -446,6 +446,21 @@ Time is injectable for tests.
 
 **Depended on by:** `session.ts`.
 
+## persona.ts and models.ts (LEA-163)
+
+**What it does:** `persona.ts` turns `language`, `address_form`, `persona_gender` into the persona block at the start of every prompt (Standard, Live, Hybrid, Pipeline) and resolves the voice (saved voice, else marin/cedar by gender; `VOICE_GENDER` is the one list of voice genders, keep it equal to the dashboard's `voice-engines.ts`). `models.ts` holds the model names with env overrides: `STANDARD_MODEL`, `HYBRID_BRAIN_MODEL`, `VOICE_MODEL`, `PIPELINE_LLM_MODEL`, `PIPELINE_LLM_EFFORT`, `PIPELINE_STT_MODEL`.
+**Depends on:** `config.ts`, `prompts/`. **Depended on by:** `prompt.ts`, `live-protocol.ts`, `session.ts`, `pipeline-session.ts`.
+
+## voice/ (LEA-164/165)
+
+**What it does:** the shared "text in, speech out" layer for Hybrid and Pipeline. `sentence-chunker.ts` cuts streamed text into speakable pieces (first clause early for low latency); `speech-output.ts` queues pieces to a `VoiceProvider`, tracks what the caller has heard with `PlaybackClock`, drains before hang-up and has a stall watchdog; `realtime-voice.ts` is the provider: a second Realtime session (`gpt-realtime-2.1-mini`) that reads each sentence aloud (`voice.read` prompt), cancels on barge-in and deletes its items.
+**Depended on by:** `session.ts` (Hybrid, when constructed with `options.voice`), `pipeline-session.ts`, `session-factory.ts`.
+
+## pipeline-session.ts, pipeline/responses-llm.ts, call-finish.ts (LEA-165)
+
+**What it does:** `PipelineCallSession` is the own chain: caller audio goes to a transcription-only Realtime session, each finished utterance runs a streamed `gpt-5.6-luna` turn through the Responses API (`pipeline/responses-llm.ts`, tool loop up to 6 rounds, filler sentence after 1.2 s of tool waiting), the text goes to the voice layer. Barge-in trims the history to the heard text. `call-finish.ts` is the post-call step (summary, enquiry, SMS/e-mail, finalize, quality, usage detail) used by it.
+**Depended on by:** `session-factory.ts` (Hybrid and Pipeline start with a fallback to Standard, `fallbackReason`).
+
 ## input-buffer.ts (LEA-155)
 
 **Purpose:** `InputBuffer` keeps the newest 75 frames (1.5 s) of the caller's

@@ -27,7 +27,8 @@ describe("overrides change exactly the targeted text", () => {
 
   it("base prompt", () => {
     const out = buildPromptFromSettings(s, null, {}, snap([[ENGINE_PROMPTS.callBase.key, "NEW BASE"]]));
-    expect(out.startsWith("NEW BASE\n\n===BUSINESS CONTEXT===")).toBe(true);
+    // The persona block (LEA-163) comes first; the base prompt follows it.
+    expect(out).toContain("NEW BASE\n\n===BUSINESS CONTEXT===");
     expect(out).toContain("===TOOLS===");
   });
 

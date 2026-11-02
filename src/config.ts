@@ -4,7 +4,11 @@ export interface AssistantSettings {
   project_id: string;
   system_prompt: string | null;
   voice: string | null;
-  voice_engine?: "standard" | "live" | null;
+  voice_engine?: "standard" | "live" | "hybrid" | "pipeline" | null;
+  // Assistant persona (LEA-163): spoken language, how the caller is addressed, and the assistant's gender.
+  language?: "cs" | "en" | "auto" | null;
+  address_form?: "formal" | "informal" | null;
+  persona_gender?: "female" | "male" | null;
   is_active: boolean;
   answer_mode?: "missed_calls" | "outside_hours" | "missed_and_outside" | "always" | null;
   working_hours?: Record<string, { from: string; to: string } | null> | null;

@@ -55,6 +55,17 @@ export class PlaybackClock {
     return this.items.length > 0 ? { itemId: this.items[0].id, playedMs: 0 } : null;
   }
 
+  /** When an item starts to play and how much audio it holds (null: never heard of it). */
+  itemState(itemId: string): { startsAt: number; totalMs: number } | null {
+    const item = this.items.find((i) => i.id === itemId);
+    return item ? { startsAt: item.startsAt, totalMs: item.totalMs } : null;
+  }
+
+  /** The clock's current time (the same one the items are measured against). */
+  nowMs(): number {
+    return this.now();
+  }
+
   /** The phone line's queue was emptied (or the speech was cancelled): nothing is left to hear. */
   clear(): void {
     this.items = [];

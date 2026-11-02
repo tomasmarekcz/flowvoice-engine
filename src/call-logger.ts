@@ -46,6 +46,22 @@ export interface TokenUsage {
   searchEmbedding: number;
 }
 
+/** What a call used, beyond the Realtime token columns, so the cost can be worked out per engine (LEA-164). */
+export interface UsageDetail {
+  engine: "standard" | "live" | "hybrid" | "pipeline";
+  brain_model?: string;
+  voice_provider?: string;
+  voice_model?: string;
+  voice_audio_output_tokens?: number;
+  voice_text_input_tokens?: number;
+  voice_characters?: number;
+  stt_model?: string;
+  stt_seconds?: number;
+  llm_input_tokens?: number;
+  llm_cached_input_tokens?: number;
+  llm_output_tokens?: number;
+}
+
 export const ZERO_TOKEN_USAGE: TokenUsage = {
   realtimeAudioIn: 0, realtimeAudioOut: 0,
   realtimeTextIn: 0,  realtimeTextOut: 0,
@@ -137,6 +153,11 @@ export class CallLogger {
       t === "input_audio_buffer.speech_stopped"
     ) return;
 
+    if (t === "response.output_text.done" && msg["text"]) {
+      this.transcript.push({ role: "assistant", text: msg["text"] as string, timestamp_ms: Date.now() });
+      this.logEvent("response.output_audio_transcript.done", "inbound", { transcript: msg["text"] });
+      return;
+    }
     if (t === "response.output_audio_transcript.done" && msg["transcript"]) {
       this.transcript.push({ role: "assistant", text: msg["transcript"] as string, timestamp_ms: Date.now() });
       this.logEvent(t, "inbound", { transcript: msg["transcript"] });
@@ -206,6 +227,32 @@ export class CallLogger {
       if (!res.ok) logger.warn("saveQuality rejected", { event: "call.quality_not_saved", status: res.status });
     } catch (e) {
       logger.error("saveQuality error", { err: e });
+    }
+  }
+
+  /** The engine could not start and another one answers: the half-made call row would be a duplicate. */
+  async discardCall(): Promise<void> {
+    if (!this.enabled || !this.callId) return;
+    try {
+      await fetch(`${getSupabaseUrl()}/rest/v1/calls?id=eq.${this.callId}`, { method: "DELETE", headers: { ...getSupabaseHeaders(), Prefer: "return=minimal" } });
+      this.callId = null;
+    } catch (e) {
+      logger.error("discardCall error", { err: e });
+    }
+  }
+
+  /** Written separately from finalizeCall for the same reason as saveQuality: an older database must not stop the call from being saved. */
+  async saveUsageDetail(detail: UsageDetail): Promise<void> {
+    if (!this.enabled || !this.callId) return;
+    try {
+      const res = await fetch(`${getSupabaseUrl()}/rest/v1/calls?id=eq.${this.callId}`, {
+        method: "PATCH",
+        headers: { ...getSupabaseHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({ usage_detail: detail }),
+      });
+      if (!res.ok) logger.warn("saveUsageDetail rejected", { event: "call.usage_detail_not_saved", status: res.status });
+    } catch (e) {
+      logger.error("saveUsageDetail error", { err: e });
     }
   }
 

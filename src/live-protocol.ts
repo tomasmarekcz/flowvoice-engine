@@ -3,6 +3,7 @@ import type { TranscriptEntry } from "./call-logger";
 import { buildPromptFromSettings, buildTools, type OpenAITool } from "./prompt";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P } from "./prompts/registry";
+import { personaBlock, resolveVoice } from "./persona";
 
 export const LIVE_ENDPOINT = "wss://api.openai.com/v1/live/sessions";
 
@@ -53,7 +54,7 @@ export function buildLiveVoicePrompt(
   tools: OpenAITool[],
   snapshot: PromptSnapshot = emptySnapshot()
 ): string {
-  const sections = [snapshot.text(P.liveVoiceBase)];
+  const sections = [personaBlock(settings, snapshot), snapshot.text(P.liveVoiceBase)];
   const context = buildVoiceBusinessContext(settings, snapshot);
   if (context) sections.push(context);
   const instructions = settings?.system_prompt?.trim();
@@ -66,6 +67,11 @@ export function buildLiveVoicePrompt(
 
 export function pickLiveVoice(voice: string | null | undefined): string {
   return voice && LIVE_VOICES.includes(voice) ? voice : DEFAULT_LIVE_VOICE;
+}
+
+/** The Live voice for this assistant: its chosen voice when it matches the assistant's gender (LEA-163), else the gender's default. */
+export function liveVoiceFor(settings: AssistantSettings | null): string {
+  return pickLiveVoice(resolveVoice(settings));
 }
 
 export function buildLiveGreetingInstruction(settings: AssistantSettings | null, snapshot: PromptSnapshot = emptySnapshot()): string | null {
@@ -93,7 +99,7 @@ export function buildLiveSessionStart(
       instructions: buildLiveVoicePrompt(settings, tools, snapshot),
       audio: {
         format: { type: "audio/pcmu", rate: 8000 },
-        output: { voice: pickLiveVoice(settings?.voice) },
+        output: { voice: liveVoiceFor(settings) },
       },
       delegation: {
         type: "responses",

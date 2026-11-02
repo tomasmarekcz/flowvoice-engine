@@ -1,9 +1,13 @@
 import { beginActivity } from "./activity";
-import { loadAssistantSettings } from "./config";
+import { loadAssistantSettings, type AssistantSettings } from "./config";
+import type { PromptSnapshot } from "./prompts/core";
 import { LiveCallSession } from "./live-session";
 import { logger } from "./logger";
 import { getSnapshot } from "./prompts/store";
 import { CallSession } from "./session";
+import { PipelineCallSession } from "./pipeline-session";
+import { RealtimeVoice } from "./voice/realtime-voice";
+import { hybridBrainModel } from "./models";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
 // Where the caller is: a phone line (Twilio, 8 kHz μ-law) or the browser test call (PCM 24 kHz).
@@ -13,6 +17,34 @@ export type Transport = "twilio" | "browser";
 // TWILIO_STANDARD_AUDIO=pcm24 switches back to converting, should the phone format ever sound worse.
 function standardAudioFor(transport: Transport): "pcmu" | "pcm24" {
   return transport === "twilio" && process.env.TWILIO_STANDARD_AUDIO !== "pcm24" ? "pcmu" : "pcm24";
+}
+
+// Live may fail to start; a quick failure (the connection dropped or was refused) is tried once more, a slow one is not
+// (OpenAI is slow right now: the caller has waited long enough) and the call goes to Standard instead.
+async function startLive(
+  settings: AssistantSettings | null,
+  projectId: string | null,
+  callerPhone: string | null,
+  twilioCallSid: string | null,
+  callbacks: SessionCallbacks,
+  promptSnapshot: PromptSnapshot
+): Promise<{ session: LiveCallSession; reason?: undefined } | { session?: undefined; reason: string }> {
+  let reason = "live failed to start";
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const live = new LiveCallSession(settings, projectId, callerPhone, twilioCallSid, callbacks, { promptSnapshot });
+    const startedAt = Date.now();
+    try {
+      await live.start();
+      return { session: live };
+    } catch (e) {
+      const elapsed = Date.now() - startedAt;
+      reason = e instanceof Error ? e.message.slice(0, 120) : reason;
+      logger.error("live session failed to start", { project_id: projectId ?? "none", attempt, elapsed_ms: elapsed, err: e });
+      await live.abort();
+      if (attempt === 2 || elapsed > 3000) break; // a slow failure is not worth another wait
+    }
+  }
+  return { reason };
 }
 
 export async function startCallSession(
@@ -57,18 +89,40 @@ async function createSession(
   const [settings, promptSnapshot] = await Promise.all([loadAssistantSettings(projectId), getSnapshot()]);
 
   let fallbackReason: string | undefined;
-  if (settings?.voice_engine === "live") {
-    const live = new LiveCallSession(settings, projectId, callerPhone, twilioCallSid, callbacks, { promptSnapshot });
+  const engine = settings?.voice_engine ?? "standard";
+  const audio = standardAudioFor(transport);
+  const reasonOf = (e: unknown) => (e instanceof Error ? e.message.slice(0, 120) : "engine failed to start");
+
+  if (engine === "live") {
+    const result = await startLive(settings, projectId, callerPhone, twilioCallSid, callbacks, promptSnapshot);
+    if (result.session) return result.session;
+    fallbackReason = result.reason;
+  } else if (engine === "hybrid") {
+    // The Realtime model listens and thinks (answering in text); a separate Realtime session is the voice.
+    const hybrid = new CallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot, {
+      audio, model: hybridBrainModel(),
+      voice: (voiceName, snapshot) => new RealtimeVoice({ voice: voiceName, snapshot }),
+    });
     try {
-      await live.start();
-      return live;
+      await hybrid.start();
+      return hybrid;
     } catch (e) {
-      logger.error("live session failed to start, falling back to standard", {
-        project_id: projectId ?? "none",
-        err: e,
-      });
-      await live.abort();
-      fallbackReason = e instanceof Error ? e.message.slice(0, 120) : "live start failed";
+      logger.error("hybrid session failed to start, falling back to standard", { project_id: projectId ?? "none", err: e });
+      await hybrid.abort();
+      fallbackReason = `hybrid: ${reasonOf(e)}`;
+    }
+  } else if (engine === "pipeline") {
+    const pipeline = new PipelineCallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot, {
+      audio,
+      voice: (voiceName, snapshot) => new RealtimeVoice({ voice: voiceName, snapshot }),
+    });
+    try {
+      await pipeline.start();
+      return pipeline;
+    } catch (e) {
+      logger.error("pipeline session failed to start, falling back to standard", { project_id: projectId ?? "none", err: e });
+      await pipeline.abort();
+      fallbackReason = `pipeline: ${reasonOf(e)}`;
     }
   }
 

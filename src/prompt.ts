@@ -2,6 +2,7 @@ import type { AssistantSettings } from "./config";
 import { buildEnquiryRules, enquiryDetailsNote, enquiryEmailNote } from "./enquiry-rules";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P, ENGINE_TOOLS as T } from "./prompts/registry";
+import { personaBlock } from "./persona";
 
 export interface OpenAITool {
   type: "function";
@@ -86,6 +87,7 @@ export function buildPromptFromSettings(
   snapshot: PromptSnapshot = emptySnapshot()
 ): string {
   const sections: string[] = [
+    personaBlock(settings, snapshot),
     snapshot.text(P.callBase),
     buildBusinessContext(settings, callerPhone, snapshot),
     snapshot.text(P.callToolsPreamble),

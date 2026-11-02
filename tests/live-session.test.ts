@@ -116,7 +116,7 @@ describe("LiveCallSession start", () => {
     const { session } = makeSession();
     const started = session.start();
     const assertion = expect(started).rejects.toThrow("timed out");
-    await vi.advanceTimersByTimeAsync(4000);
+    await vi.advanceTimersByTimeAsync(6000);
     await assertion;
   });
 

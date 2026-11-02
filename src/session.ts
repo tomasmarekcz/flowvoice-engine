@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, prepareEnquiryCheck, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
+import { CallLogger, type UsageDetail, generateCallSummary, maybeCreatePostCallEnquiry, prepareEnquiryCheck, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import { loadAssistantSettings, AssistantSettings } from "./config";
 import { logger } from "./logger";
 import { bindToCurrentContext } from "./log/context";
@@ -15,6 +15,10 @@ import { refreshExternalCalendars } from "./ical-refresh";
 import type { AudioFormat, SessionCallbacks, VoiceSession } from "./session-types";
 import { CallQualityTracker, audioDurationMs, toolResultFailed } from "./quality-tracker";
 import { PlaybackClock } from "./playback-clock";
+import { resolveVoice } from "./persona";
+import { standardModel, voiceModel } from "./models";
+import { SpeechOutput } from "./voice/speech-output";
+import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { InputBuffer } from "./input-buffer";
 
 export function formatOwnerSms(
@@ -50,6 +54,13 @@ export interface CallSessionOptions {
   fallbackReason?: string;
   /** Audio format spoken with OpenAI: "pcmu" = the phone line's own format, no conversion (LEA-155); default PCM 24 kHz. */
   audio?: "pcmu" | "pcm24";
+  /** Realtime model for this call; default is the Standard model (STANDARD_MODEL). */
+  model?: string;
+  /**
+   * Hybrid engine (LEA-164): the Realtime model listens and thinks but answers in text; this provider says the text.
+   * Absent = the Realtime model speaks itself (Standard).
+   */
+  voice?: (voiceName: string, snapshot: PromptSnapshot) => VoiceProvider;
 }
 
 export class CallSession implements VoiceSession {
@@ -77,6 +88,14 @@ export class CallSession implements VoiceSession {
   // The caller's audio waits here until OpenAI has accepted the session settings (its default format is not ours).
   private readonly inputBuffer = new InputBuffer();
   private listening = false;
+  // Hybrid engine state (LEA-164).
+  private speech: SpeechOutput | null = null;
+  private voiceReady: Promise<void> = Promise.resolve();
+  private nativeVoice = false; // the separate voice failed twice: the Realtime model speaks by itself from now on
+  private voiceRecoveries = 0;
+  private brainResponseActive = false;
+  private lastAssistantItemId: string | null = null;
+  private voiceUsage = { audioOutputTokens: 0, textInputTokens: 0, characters: 0 };
   private usageAccum = {
     realtimeAudioIn: 0, realtimeAudioOut: 0,
     realtimeTextIn: 0,  realtimeTextOut: 0,
@@ -122,14 +141,16 @@ export class CallSession implements VoiceSession {
     const instructions = buildPromptFromSettings(settings, this.callerPhone, {}, this.promptSnapshot);
     const tools = buildTools(settings, this.promptSnapshot);
     recordUsage(this.promptSnapshot.usedVersionIds());
-    const voice = settings?.voice ?? "alloy";
+    const voice = resolveVoice(settings);
 
-    this.logger.openaiPayload = { model: "gpt-realtime-2", voice, instructions, tools };
+    const model = this.options.model ?? standardModel();
+    this.logger.openaiPayload = { model, voice, instructions, tools, engine: this.options.voice ? "hybrid" : "standard" };
+    if (this.options.voice) this.voiceReady = this.startVoice(voice);
     const audioFormat = this.options.audio === "pcmu" ? { type: "audio/pcmu" } : { type: "audio/pcm", rate: 24000 };
 
     logger.info("connecting to OpenAI", { project_id: this.projectId ?? "none" });
 
-    const openaiWs = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-realtime-2", {
+    const openaiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=${model}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     this.openaiWs = openaiWs;
@@ -141,6 +162,8 @@ export class CallSession implements VoiceSession {
         type: "session.update",
         session: {
           type: "realtime",
+          // Hybrid: the model answers in text and a separate voice says it. The audio output below is the fallback voice.
+          ...(this.options.voice ? { output_modalities: ["text"] } : {}),
           instructions,
           tools,
           tool_choice: tools.length > 0 ? "auto" : "none",
@@ -189,7 +212,68 @@ export class CallSession implements VoiceSession {
       logger.error("OpenAI WS error", { event: "openai.ws_error", err: e });
       this.callbacks.sendJson({ type: "error", message: `OpenAI error: ${e.message}` });
     }));
+
+    // Hybrid: the call only counts as started once the voice is ready, so a voice that cannot start falls back to Standard.
+    await this.voiceReady;
   }
+
+  private usageDetail(): UsageDetail {
+    const model = this.options.model ?? standardModel();
+    if (!this.options.voice) return { engine: "standard", brain_model: model };
+    return {
+      engine: "hybrid",
+      brain_model: model,
+      voice_provider: "openai-realtime",
+      voice_model: voiceModel(),
+      voice_audio_output_tokens: this.voiceUsage.audioOutputTokens,
+      voice_text_input_tokens: this.voiceUsage.textInputTokens,
+      voice_characters: this.voiceUsage.characters,
+    };
+  }
+
+  // ─── Hybrid: the separate voice ─────────────────────────────────────────────────
+
+  private startVoice(voiceName: string): Promise<void> {
+    const provider = this.options.voice!(voiceName, this.promptSnapshot);
+    this.speech = new SpeechOutput(provider, {
+      sendAudio: (audio, format) => this.callbacks.sendAudio(audio, format),
+      clock: this.clock,
+      onSpeech: (ms) => this.quality.assistantAudio(ms),
+      onUsage: (u: VoiceUsage) => {
+        this.voiceUsage.audioOutputTokens += u.audioOutputTokens;
+        this.voiceUsage.textInputTokens += u.textInputTokens;
+        this.voiceUsage.characters += u.characters;
+      },
+      onError: (e) => this.onVoiceProblem(e.message),
+      onStall: () => this.onVoiceProblem("no sound from the voice"),
+    });
+    return this.speech.start();
+  }
+
+  // The voice broke in the middle of a call: start it again once; if that does not help, the Realtime model speaks itself.
+  private onVoiceProblem(reason: string): void {
+    if (this.ended || this.nativeVoice) return;
+    logger.error("voice problem", { event: "voice.problem", reason, recoveries: this.voiceRecoveries });
+    this.quality.toolFinished("voice", 0, true);
+    this.speech?.close();
+    if (this.voiceRecoveries < 1 && this.options.voice) {
+      this.voiceRecoveries++;
+      this.voiceReady = this.startVoice(resolveVoice(this.settings)).catch(() => this.switchToNativeVoice());
+    } else {
+      this.switchToNativeVoice();
+    }
+  }
+
+  private switchToNativeVoice(): void {
+    this.nativeVoice = true;
+    this.speech = null;
+    if (this.openaiWs?.readyState === WebSocket.OPEN) {
+      this.openaiWs.send(JSON.stringify({ type: "session.update", session: { type: "realtime", output_modalities: ["audio"] } }));
+    }
+    logger.warn("hybrid voice replaced by the Realtime model's own voice", { event: "voice.native_fallback" });
+  }
+
+  private get hybrid(): boolean { return !!this.options.voice && !this.nativeVoice && !!this.speech; }
 
   handleClientAudio(audioBase64: string): void {
     if (!this.listening) {
@@ -229,10 +313,19 @@ export class CallSession implements VoiceSession {
     this.callbacks.endCall();
   }
 
+  /** Close everything without writing the call (the engine could not start and Standard answers instead). */
+  async abort(): Promise<void> {
+    this.ended = true;
+    this.speech?.close();
+    try { this.openaiWs?.close(); } catch { /* already closed */ }
+    await this.logger.discardCall();
+  }
+
   async end(): Promise<void> {
     if (this.ended) return;
     this.ended = true;
     logger.info("session ending, generating summary", { event: "call.ending" });
+    this.speech?.close();
     if (this.openaiWs?.readyState === WebSocket.OPEN) this.openaiWs.close();
     const apiKey = process.env.OPENAI_API_KEY ?? "";
 
@@ -318,6 +411,7 @@ export class CallSession implements VoiceSession {
 
     await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSmsFinal, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
     await this.logger.saveQuality(this.quality.finish());
+    await this.logger.saveUsageDetail(this.usageDetail());
 
     // Send email notification if enabled
     if (plan.send && (plan.forceGenerate || this.settings?.email_owner_enabled) && emailOwner && this.logger.callId) {
@@ -362,7 +456,16 @@ export class CallSession implements VoiceSession {
       logger.debug("← openai event", { type });
     }
 
-    if (type === "response.created") this.dropAudio = false; // a new answer: its speech is wanted again
+    if (type === "response.created") { this.dropAudio = false; this.brainResponseActive = true; } // a new answer: its speech is wanted again
+    if (type === "response.done") this.brainResponseActive = false;
+    if (type === "response.output_item.added") {
+      const item = msg["item"] as { id?: string; role?: string; type?: string } | undefined;
+      if (item?.type === "message" && item.role === "assistant" && item.id) this.lastAssistantItemId = item.id;
+    }
+    if (this.options.voice && !this.nativeVoice) {
+      if (type === "response.output_text.delta" && this.speech && !this.dropAudio) this.speech.pushText(String(msg["delta"] ?? ""));
+      if (type === "response.output_text.done" && this.speech && !this.dropAudio) this.speech.endText();
+    }
 
     if (type === "response.done") {
       const response = msg["response"] as Record<string, unknown> | undefined;
@@ -394,14 +497,17 @@ export class CallSession implements VoiceSession {
 
     if (type === "session.updated" && this.settings?.greeting_enabled && this.settings?.greeting_message?.trim()) {
       logger.info("triggering greeting response");
-      if (this.openaiWs?.readyState === WebSocket.OPEN) {
+      if (this.options.voice) {
+        // Hybrid: the greeting is known text, so it goes straight to the voice without waiting for the model.
+        void this.sayGreeting(this.settings.greeting_message.trim());
+      } else if (this.openaiWs?.readyState === WebSocket.OPEN) {
         this.openaiWs.send(JSON.stringify({ type: "response.create" }));
       }
     }
 
     // The quality measurement sees the interruption first (it needs the assistant still audible); then the queue is emptied.
     this.trackQuality(type, msg);
-    if (type === "input_audio_buffer.speech_started" && this.clock.audible()) this.bargeIn();
+    if (type === "input_audio_buffer.speech_started" && (this.clock.audible() || (this.hybrid && this.speech!.busy))) this.bargeIn();
     this.logger.handleOpenAIEvent(msg);
 
     this.callbacks.sendJson(msg);
@@ -413,6 +519,21 @@ export class CallSession implements VoiceSession {
         msg["call_id"] as string
       );
     }
+  }
+
+  private async sayGreeting(text: string): Promise<void> {
+    await this.voiceReady;
+    if (this.nativeVoice || !this.speech) {
+      // No separate voice: the Realtime model speaks the greeting itself.
+      if (this.openaiWs?.readyState === WebSocket.OPEN) this.openaiWs.send(JSON.stringify({ type: "response.create" }));
+      return;
+    }
+    this.speech.say(text);
+    // The model should know what it has already said.
+    if (this.openaiWs?.readyState === WebSocket.OPEN) {
+      this.openaiWs.send(JSON.stringify({ type: "conversation.item.create", item: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } }));
+    }
+    this.logger.handleOpenAIEvent({ type: "response.output_audio_transcript.done", transcript: text });
   }
 
   // Feeds the quality measurement (LEA-154) from the events OpenAI already sends; it never changes the call.
@@ -429,6 +550,7 @@ export class CallSession implements VoiceSession {
   // OpenAI's own speech detection already ignores a ding or street noise (measured, LEA-155), so the first real speech is enough.
 
   private bargeIn(): void {
+    if (this.hybrid) { this.bargeInHybrid(); return; }
     const playing = this.clock.playing();
     const queuedMs = this.clock.remainingMs();
     const ws = this.openaiWs;
@@ -451,6 +573,24 @@ export class CallSession implements VoiceSession {
     logger.info("caller interrupted the assistant", { event: "call.barge_in", played_ms: playing?.playedMs ?? 0, unheard_ms: queuedMs });
   }
 
+  // Hybrid: the answer is text spoken by a separate voice. Stop the voice, empty the phone line, and tell the model only what was heard.
+  private bargeInHybrid(): void {
+    const queuedMs = this.clock.remainingMs();
+    const heard = this.speech?.cancel() ?? "";
+    const ws = this.openaiWs;
+    if (ws?.readyState === WebSocket.OPEN) {
+      if (this.lastAssistantItemId) ws.send(JSON.stringify({ type: "conversation.item.delete", item_id: this.lastAssistantItemId }));
+      if (heard) ws.send(JSON.stringify({ type: "conversation.item.create", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: heard }] } }));
+    }
+    this.lastAssistantItemId = null;
+    this.callbacks.clearAudio?.();
+    this.callbacks.sendJson({ type: "engine.clear_audio" });
+    this.clock.clear();
+    this.quality.playbackCleared();
+    this.dropAudio = true; // the rest of the interrupted answer's text is not to be spoken
+    logger.info("caller interrupted the assistant", { event: "call.barge_in", engine: "hybrid", heard_chars: heard.length, unheard_ms: queuedMs });
+  }
+
   private async executeToolCall(name: string, argsJson: string, callId: string): Promise<void> {
     logger.info("executing tool", { name });
     let args: Record<string, unknown> = {};
@@ -470,6 +610,8 @@ export class CallSession implements VoiceSession {
         // No response.create — AI should not speak after hanging up
       }
       this.callbacks.sendJson({ type: "engine.tool_done", name });
+      // Hybrid: let the voice finish the goodbye before the session is closed.
+      if (this.hybrid) await this.speech!.drained();
       // Generate the call summary now, but don't hang up yet — the goodbye
       // audio for this turn may still be streaming out to Twilio. Send a
       // Twilio "mark" right after it; Twilio only echoes it back once that

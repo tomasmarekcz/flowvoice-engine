@@ -25,7 +25,9 @@ import { planTestCallNotifications } from "./test-call";
 import { refreshExternalCalendars } from "./ical-refresh";
 import { executeTool as defaultExecuteTool } from "./tools";
 
-const START_TIMEOUT_MS = 4000;
+// How long Live may take to start before the call is answered by Standard instead. It was 4 s; one production call timed out
+// at that limit (30. 10. 2026) while staging starts took 1.6 s on average and 2.5 s at most.
+const START_TIMEOUT_MS = 6000;
 // The goodbye may still be streaming when end_call arrives, so wait for a quiet gap
 // before asking Twilio to confirm playback, then hang up on the echoed mark.
 const END_CALL_IDLE_MS = 1200;
