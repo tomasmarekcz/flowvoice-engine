@@ -11,6 +11,7 @@ import {
   LIVE_ENDPOINT,
   TranscriptAccumulator,
   buildLiveGreetingInstruction,
+  liveVoiceFor,
   buildLiveSessionStart,
   buildToolResultMessages,
   extractFunctionCall,
@@ -254,7 +255,7 @@ export class LiveCallSession implements VoiceSession {
   /** Plays a recorded sentence on the phone line (Live always speaks the phone's own format). */
   private playClip(kind: "wait" | "apology"): void {
     const lang = speaksEnglish(this.settings) ? "en" : "cs";
-    const clip = fallbackClip(kind, lang);
+    const clip = fallbackClip(kind, lang, liveVoiceFor(this.settings));
     if (clip) this.callbacks.sendAudio(clip, "mulaw8");
   }
 

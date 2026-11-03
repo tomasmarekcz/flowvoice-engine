@@ -319,7 +319,7 @@ export class CallSession implements VoiceSession {
   private playClip(kind: "wait" | "apology"): void {
     if (this.audioFormat !== "mulaw8") return;
     const lang = speaksEnglish(this.settings) ? "en" : "cs";
-    const clip = fallbackClip(kind, lang);
+    const clip = fallbackClip(kind, lang, this.voiceName);
     if (clip) this.callbacks.sendAudio(clip, "mulaw8");
   }
 
