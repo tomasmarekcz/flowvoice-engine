@@ -55,6 +55,8 @@ export interface FixedTexts {
   limitWarning: string;
   limitBye: string;
   reconnected: string;
+  /** Said by the engine when the model hung up without saying goodbye. */
+  goodbye: string;
 }
 
 /** The fixed sentences in the language of the call (editable in the admin prompt registry). */
@@ -66,6 +68,7 @@ export function fixedTexts(settings: AssistantSettings | null, snapshot: PromptS
     limitWarning: snapshot.text(en ? P.limitWarningEn : P.limitWarningCs),
     limitBye: snapshot.text(en ? P.limitByeEn : P.limitByeCs),
     reconnected: snapshot.text(en ? P.reconnectedEn : P.reconnectedCs),
+    goodbye: snapshot.text(en ? P.goodbyeEn : P.goodbyeCs),
   };
 }
 

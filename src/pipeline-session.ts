@@ -370,6 +370,8 @@ export class PipelineCallSession implements VoiceSession {
           this.history.push({ type: "function_call", call_id: call.callId, name: call.name, arguments: call.arguments });
           if (call.name === "end_call") {
             this.history.push({ type: "function_call_output", call_id: call.callId, output: JSON.stringify({ status: "ok" }) });
+            // The model sometimes hangs up without a word (LEA-158): then the engine says the goodbye itself.
+            if (!text.trim()) this.speakFixed(fixedTexts(this.settings, this.promptSnapshot).goodbye);
             await this.hangUp(turn, true);
             return;
           }

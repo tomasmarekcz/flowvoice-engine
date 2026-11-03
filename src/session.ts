@@ -97,7 +97,9 @@ export class CallSession implements VoiceSession {
   private hangupResumable = false; // an end_call can be taken back when the caller speaks again; silence / limit / error cannot
   private fixedSentence: string | null = null; // waiting for the current answer to finish before it can be said
   private hangUpAfterFixed: EndReason | null = null;
-  private awaitingFixedDone = false;
+  private fixedInFlight = 0; // fixed-sentence answers asked for and not yet finished
+  private goodbyeText: string | null = null;
+  private goodbyeSent = false;
   // Connection to OpenAI (re-made once it drops, LEA-160).
   private instructions = "";
   private tools: ReturnType<typeof buildTools> = [];
@@ -118,6 +120,7 @@ export class CallSession implements VoiceSession {
   private nativeVoice = false; // the separate voice failed twice: the Realtime model speaks by itself from now on
   private voiceRecoveries = 0;
   private brainResponseActive = false;
+  private spokeThisResponse = false; // the answer under way has already had words or sound (so a goodbye was said)
   private lastAssistantItemId: string | null = null;
   private voiceUsage = { audioOutputTokens: 0, textInputTokens: 0, characters: 0 };
   private usageAccum = {
@@ -347,24 +350,27 @@ export class CallSession implements VoiceSession {
     this.sendFixed(text);
   }
 
-  // A fixed sentence that waited for the answer under way is said now; a goodbye is followed by the hang-up.
+  // A fixed sentence that waited for the answer under way is said now; a goodbye is followed by the hang-up, but only
+  // once every fixed sentence asked for (a slow OpenAI may still owe the "still there?" question) has been spoken.
   private afterResponseDone(): void {
+    if (this.fixedInFlight > 0) this.fixedInFlight--;
     if (this.fixedSentence) {
       const text = this.fixedSentence;
       this.fixedSentence = null;
-      if (this.hangUpAfterFixed) this.awaitingFixedDone = true;
       this.sendFixed(text);
       return;
     }
-    if (this.hangUpAfterFixed && this.awaitingFixedDone) {
+    if (this.hangUpAfterFixed && this.goodbyeSent && this.fixedInFlight === 0) {
       this.hangUpAfterFixed = null;
-      this.awaitingFixedDone = false;
+      this.goodbyeSent = false;
       this.beginHangup(false);
     }
   }
 
   private sendFixed(text: string): void {
     if (this.openaiWs?.readyState !== WebSocket.OPEN) return;
+    this.fixedInFlight++;
+    if (text === this.goodbyeText) this.goodbyeSent = true;
     this.openaiWs.send(JSON.stringify({
       type: "response.create",
       response: { instructions: `Say exactly this sentence to the caller, word for word, and nothing else: "${text}"`, tool_choice: "none" },
@@ -383,7 +389,7 @@ export class CallSession implements VoiceSession {
       return;
     }
     this.hangUpAfterFixed = reason;
-    this.awaitingFixedDone = !this.brainResponseActive;
+    this.goodbyeText = text;
     await this.speakFixed(text);
   }
 
@@ -659,6 +665,7 @@ export class CallSession implements VoiceSession {
       this.clock.audio(String(msg["item_id"] ?? ""), ms);
       this.quality.assistantAudio(ms);
       this.watchdog?.assistantAudio(ms);
+      this.spokeThisResponse = true;
       this.logger.handleOpenAIEvent(msg);
       this.callbacks.sendAudio(msg["delta"] as string, format);
       return;
@@ -670,7 +677,7 @@ export class CallSession implements VoiceSession {
       logger.debug("← openai event", { type });
     }
 
-    if (type === "response.created") { this.dropAudio = false; this.brainResponseActive = true; this.watchdog?.responseActive(true); } // a new answer: its speech is wanted again
+    if (type === "response.created") { this.dropAudio = false; this.brainResponseActive = true; this.spokeThisResponse = false; this.watchdog?.responseActive(true); } // a new answer: its speech is wanted again
     if (type === "response.done") {
       this.brainResponseActive = false;
       this.watchdog?.responseActive(false);
@@ -684,7 +691,7 @@ export class CallSession implements VoiceSession {
       if (item?.type === "message" && item.role === "assistant" && item.id) this.lastAssistantItemId = item.id;
     }
     if (this.options.voice && !this.nativeVoice) {
-      if (type === "response.output_text.delta" && this.speech && !this.dropAudio) this.speech.pushText(String(msg["delta"] ?? ""));
+      if (type === "response.output_text.delta" && this.speech && !this.dropAudio) { this.spokeThisResponse = true; this.speech.pushText(String(msg["delta"] ?? "")); }
       if (type === "response.output_text.done" && this.speech && !this.dropAudio) this.speech.endText();
     }
 
@@ -833,6 +840,11 @@ export class CallSession implements VoiceSession {
         // No response.create — AI should not speak after hanging up
       }
       this.callbacks.sendJson({ type: "engine.tool_done", name });
+      // The model sometimes hangs up without a word (measured, LEA-158): then the engine says the goodbye itself.
+      if (!this.spokeThisResponse) {
+        await this.sayAndHangUp(fixedTexts(this.settings, this.promptSnapshot).goodbye, "caller");
+        return;
+      }
       // Hybrid: let the voice finish the goodbye before the line is closed.
       if (this.hybrid) await this.speech!.drained();
       // The goodbye audio for this turn may still be streaming out to Twilio. Send a Twilio "mark" right after it;

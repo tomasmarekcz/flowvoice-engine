@@ -40,6 +40,12 @@ async function startSession(sid: string | null = "CA1") {
   return { session, callbacks, says, sock };
 }
 const endCallCall = { type: "response.function_call_arguments.done", name: "end_call", call_id: "c1", arguments: JSON.stringify({ reason: "done" }) };
+// The model says its goodbye (audio) and then calls end_call in the same answer.
+const goodbyeThenEndCall = (says: (m: Record<string, unknown>) => void) => {
+  says({ type: "response.created" });
+  says({ type: "response.output_audio.delta", item_id: "i1", delta: "QUJD" });
+  says(endCallCall);
+};
 const instructionsOf = (sock: { sent: Array<Record<string, unknown>> }) => sock.sent.filter((m) => m["type"] === "response.create").map((m) => JSON.stringify(m)).join("\n");
 
 beforeEach(() => { h.sockets.length = 0; vi.useFakeTimers(); vi.setSystemTime(1_000_000); });
@@ -48,7 +54,7 @@ afterEach(() => vi.useRealTimers());
 describe("Standard: end_call (LEA-158)", () => {
   it("hangs up on the mark and ends the call only then", async () => {
     const { callbacks, says, session } = await startSession();
-    says(endCallCall);
+    goodbyeThenEndCall(says);
     await vi.advanceTimersByTimeAsync(10);
     expect(callbacks.sendMark).toHaveBeenCalledTimes(1);
     expect(callbacks.endCall).not.toHaveBeenCalled();
@@ -58,7 +64,7 @@ describe("Standard: end_call (LEA-158)", () => {
 
   it("keeps the call open when the caller speaks after the goodbye (the old mark is ignored)", async () => {
     const { callbacks, says, session } = await startSession();
-    says(endCallCall);
+    goodbyeThenEndCall(says);
     await vi.advanceTimersByTimeAsync(2000);
     says({ type: "input_audio_buffer.speech_started" });
     session.handleTwilioMark(callbacks.sendMark.mock.calls[0][0] as string);
@@ -67,7 +73,7 @@ describe("Standard: end_call (LEA-158)", () => {
 
   it("does not take the hang-up back for the caller's own goodbye right after end_call", async () => {
     const { callbacks, says, session } = await startSession();
-    says(endCallCall);
+    goodbyeThenEndCall(says);
     await vi.advanceTimersByTimeAsync(500);
     says({ type: "input_audio_buffer.speech_started" });
     session.handleTwilioMark(callbacks.sendMark.mock.calls[0][0] as string);
@@ -131,5 +137,49 @@ describe("Standard: a connection opened ahead of the call (LEA-162)", () => {
     expect(h.sockets).toHaveLength(0); // no new connection
     expect(ahead.sent.some((m) => m["type"] === "session.update")).toBe(true);
     expect(ahead.handlers["message"]).toBeDefined();
+  });
+});
+
+describe("Standard: the goodbye after silence waits for the earlier fixed sentence (slow OpenAI)", () => {
+  it("does not hang up until both the question and the goodbye have been spoken", async () => {
+    const { callbacks, says, sock } = await startSession();
+    await vi.advanceTimersByTimeAsync(6000); // the question is asked, OpenAI has not answered yet (no response.created)
+    await vi.advanceTimersByTimeAsync(6000); // the goodbye is asked
+    expect(sock().sent.filter((m) => m["type"] === "response.create" && JSON.stringify(m).includes("Say exactly"))).toHaveLength(2);
+    says({ type: "response.created" });
+    says({ type: "response.done", response: {} }); // the question is finished
+    await vi.advanceTimersByTimeAsync(5);
+    expect(callbacks.sendMark).not.toHaveBeenCalled();
+    says({ type: "response.created" });
+    says({ type: "response.done", response: {} }); // the goodbye is finished
+    await vi.advanceTimersByTimeAsync(5);
+    expect(callbacks.sendMark).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Standard: end_call without a goodbye (LEA-158)", () => {
+  it("the engine says the goodbye itself and hangs up after it", async () => {
+    const { callbacks, says, sock } = await startSession();
+    says({ type: "response.created" });
+    says(endCallCall); // no audio was spoken in this answer
+    await vi.advanceTimersByTimeAsync(5);
+    expect(callbacks.sendMark).not.toHaveBeenCalled();
+    says({ type: "response.done", response: {} }); // the answer with the silent end_call is over: the goodbye is asked
+    await vi.advanceTimersByTimeAsync(5);
+    expect(JSON.stringify(sock().sent)).toContain("Děkuji za zavolání. Na shledanou.");
+    says({ type: "response.created" });
+    says({ type: "response.done", response: {} });
+    await vi.advanceTimersByTimeAsync(5);
+    expect(callbacks.sendMark).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not add a second goodbye when the model already spoke one", async () => {
+    const { callbacks, says, sock } = await startSession("CA1");
+    says({ type: "response.created" });
+    says({ type: "response.output_audio.delta", item_id: "i1", delta: "QUJD" });
+    says(endCallCall);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(JSON.stringify(sock().sent)).not.toContain("Děkuji za zavolání");
+    expect(callbacks.sendMark).toHaveBeenCalledTimes(1);
   });
 });
