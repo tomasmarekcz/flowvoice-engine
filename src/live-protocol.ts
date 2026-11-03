@@ -86,8 +86,8 @@ export function buildLiveSessionStart(
   callerPhone: string | null,
   snapshot: PromptSnapshot = emptySnapshot()
 ): { message: Record<string, unknown>; tools: OpenAITool[] } {
-  const tools = buildTools(settings, snapshot);
-  const businessPrompt = buildPromptFromSettings(settings, callerPhone, { includeGreeting: false }, snapshot);
+  const tools = buildTools(settings, snapshot, { live: true });
+  const businessPrompt = buildPromptFromSettings(settings, callerPhone, { includeGreeting: false, includeEnding: false }, snapshot);
   const backendInstructions = tools.some((t) => t.name === "end_call")
     ? `${businessPrompt}\n\n${snapshot.text(P.liveBackendEndCallRule)}`
     : businessPrompt;

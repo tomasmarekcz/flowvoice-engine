@@ -24,12 +24,12 @@ import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { responsesLlm, type LlmStream } from "./pipeline/responses-llm";
 import { finishCall } from "./call-finish";
+import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, type EndReason } from "./call-ending";
 
 const STT_START_TIMEOUT_MS = 6000;
 // A tool that takes longer than this gets a short "one moment" sentence so the caller does not sit in silence.
 const TOOL_FILLER_MS = 1200;
 const MAX_TOOL_ROUNDS = 6;
-const END_CALL_MARK_FALLBACK_MS = 15000;
 // Speech this long with an empty transcript is a person talking that we did not understand (shorter is noise or a click).
 const UNCLEAR_MIN_SPEECH_MS = 700;
 // After this many "I didn't catch that" in a row the assistant stops asking and waits.
@@ -74,6 +74,12 @@ export class PipelineCallSession implements VoiceSession {
   private ended = false;
   private pendingEndCallMark: string | null = null;
   private endCallFallbackTimer: NodeJS.Timeout | null = null;
+  // Keeping watch over the call (LEA-158/160).
+  private watchdog: CallWatchdog | null = null;
+  private endReason: EndReason = "caller";
+  private hangupRequestedAt = 0;
+  private hangupResumable = false;
+  private llmFailuresInRow = 0;
   private confirmedBookings: ConfirmedBooking[] = [];
   private bookingMade = false;
   private embeddingTokens = 0;
@@ -142,6 +148,14 @@ export class PipelineCallSession implements VoiceSession {
       this.history.push({ role: "assistant", content: greeting });
       this.logger.handleOpenAIEvent({ type: "response.output_text.done", text: greeting });
     }
+
+    this.watchdog = new CallWatchdog({
+      speak: (text) => this.speakFixed(text),
+      sayAndHangUp: (text, reason) => this.sayAndHangUp(text, reason),
+      hangUp: (reason) => { this.endReason = reason; void this.hangUp(this.turnId, false); },
+      texts: fixedTexts(settings, promptSnapshot),
+    }, this.twilioCallSid ? maxCallMs(settings) : 24 * 60 * 60_000); // a test call keeps its own time limit
+    this.watchdog.start();
   }
 
   // ─── Speech recognition ─────────────────────────────────────────────────────────
@@ -204,6 +218,8 @@ export class PipelineCallSession implements VoiceSession {
     if (type === "input_audio_buffer.speech_started") {
       this.quality.callerSpeechStarted();
       this.speechStartedAt = Date.now();
+      this.watchdog?.callerSpoke();
+      this.cancelHangupIfCallerSpeaks();
       // Only speech that is playing or being produced is cut; a turn that is still thinking is replaced when the new words are recognised.
       if (this.clock.audible() || this.speech?.busy) this.bargeIn();
     } else if (type === "input_audio_buffer.speech_stopped") {
@@ -251,13 +267,15 @@ export class PipelineCallSession implements VoiceSession {
   private async giveUp(): Promise<void> {
     if (this.givingUp || this.ended) return;
     this.givingUp = true;
+    this.endReason = "technical_error";
+    this.watchdog?.stop();
     this.abortTurn();
     try { this.stt?.close(); } catch { /* already closed */ }
     this.callbacks.sendJson({ type: "error", message: "Speech recognition disconnected" });
     const sentence = this.promptSnapshot.text(effectiveLanguage(this.settings) === "en" ? P.connectionLostEn : P.connectionLostCs);
     this.logger.handleOpenAIEvent({ type: "response.output_text.done", text: sentence });
     this.speech?.say(sentence);
-    await this.hangUp(this.turnId);
+    await this.hangUp(this.turnId, false);
   }
 
   handleClientAudio(audioBase64: string): void {
@@ -280,7 +298,7 @@ export class PipelineCallSession implements VoiceSession {
     return new SpeechOutput(provider, {
       sendAudio: (audio, format) => this.callbacks.sendAudio(audio, format),
       clock: this.clock,
-      onSpeech: (ms) => this.quality.assistantAudio(ms),
+      onSpeech: (ms) => { this.quality.assistantAudio(ms); this.watchdog?.assistantAudio(ms); },
       onUsage: (u: VoiceUsage) => { this.usage.voiceAudioOut += u.audioOutputTokens; this.usage.voiceTextIn += u.textInputTokens; this.usage.voiceChars += u.characters; },
       onError: (e) => this.onVoiceProblem(e.message),
       onStall: () => this.onVoiceProblem("no sound from the voice"),
@@ -313,14 +331,17 @@ export class PipelineCallSession implements VoiceSession {
     this.turnCtrl?.abort();
     this.turnCtrl = null;
     this.turnActive = false;
+    this.watchdog?.responseActive(false);
   }
 
-  private async runTurn(): Promise<void> {
+  private async runTurn(attempt = 0): Promise<void> {
     const turn = this.turnId;
     const ctrl = new AbortController();
     this.turnCtrl = ctrl;
     this.turnActive = true;
+    this.watchdog?.responseActive(true);
     this.assistantEntry = null;
+    let spoke = false;
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         let text = "";
@@ -331,13 +352,15 @@ export class PipelineCallSession implements VoiceSession {
         });
         for await (const event of stream) {
           if (turn !== this.turnId) return;
-          if (event.type === "text") { text += event.delta; this.speech?.pushText(event.delta); }
+          if (event.type === "text") { text += event.delta; spoke = true; this.speech?.pushText(event.delta); }
           else if (event.type === "tool_call") calls.push(event);
           else if (event.type === "usage") { this.usage.llmInput += event.inputTokens; this.usage.llmCachedInput += event.cachedInputTokens; this.usage.llmOutput += event.outputTokens; }
         }
         if (turn !== this.turnId) return;
         this.speech?.endText();
+        this.llmFailuresInRow = 0;
         if (text.trim()) {
+          this.watchdog?.assistantSaid(text);
           this.history.push({ role: "assistant", content: text });
           this.assistantEntry = this.history.length - 1;
           this.logger.handleOpenAIEvent({ type: "response.output_text.done", text });
@@ -347,7 +370,7 @@ export class PipelineCallSession implements VoiceSession {
           this.history.push({ type: "function_call", call_id: call.callId, name: call.name, arguments: call.arguments });
           if (call.name === "end_call") {
             this.history.push({ type: "function_call_output", call_id: call.callId, output: JSON.stringify({ status: "ok" }) });
-            await this.hangUp(turn);
+            await this.hangUp(turn, true);
             return;
           }
           await this.runTool(call, turn);
@@ -357,11 +380,19 @@ export class PipelineCallSession implements VoiceSession {
       logger.warn("pipeline turn stopped after too many tool rounds", { event: "pipeline.max_rounds" });
     } catch (e) {
       if (ctrl.signal.aborted || turn !== this.turnId) return;
-      logger.error("pipeline turn failed", { event: "pipeline.turn_error", err: e });
+      logger.error("pipeline turn failed", { event: "pipeline.turn_error", err: e, attempt });
       this.quality.toolFinished("llm", 0, true);
       this.speech?.endText();
+      // The model did not answer: ask once more if nothing was said yet; if it keeps failing, end the call properly (LEA-160).
+      if (!spoke && attempt === 0) {
+        this.turnActive = false;
+        await new Promise((r) => setTimeout(r, 300));
+        if (turn === this.turnId && !this.ended) { void this.runTurn(1); return; }
+      } else if (++this.llmFailuresInRow >= 2) {
+        void this.giveUp();
+      }
     } finally {
-      if (turn === this.turnId) this.turnActive = false;
+      if (turn === this.turnId) { this.turnActive = false; this.watchdog?.responseActive(false); }
     }
   }
 
@@ -371,6 +402,7 @@ export class PipelineCallSession implements VoiceSession {
     this.logger.handleOpenAIEvent({ type: "response.function_call_arguments.done", call_id: call.callId, name: call.name, arguments: call.arguments });
     logger.info("executing tool", { name: call.name });
     this.quality.toolStarted();
+    this.watchdog?.toolStarted();
     const t0 = Date.now();
     const filler = setTimeout(() => {
       if (turn === this.turnId && this.speech && !this.speech.busy && !this.clock.audible()) {
@@ -384,6 +416,7 @@ export class PipelineCallSession implements VoiceSession {
       this.embeddingTokens += out.embeddingTokens;
     } finally {
       clearTimeout(filler);
+      this.watchdog?.toolFinished();
     }
     this.quality.toolFinished(call.name, Date.now() - t0, toolResultFailed(result));
     if (call.name === "create_calendar_event") {
@@ -421,33 +454,77 @@ export class PipelineCallSession implements VoiceSession {
 
   // ─── End of the call ────────────────────────────────────────────────────────────
 
-  private async hangUp(turn: number): Promise<void> {
-    logger.info("end_call requested", { event: "call.end_call" });
+  private async hangUp(turn: number, resumable: boolean): Promise<void> {
+    logger.info("end_call requested", { event: "call.end_call", reason: this.endReason });
     this.callbacks.sendJson({ type: "engine.tool_done", name: "end_call" });
     this.speech?.endText();
     await this.speech?.drained();
     if (turn !== this.turnId) return; // the caller spoke during the goodbye: the call goes on
-    this.end().catch((e) => logger.error("end_call session.end error", { err: e }));
+    this.beginHangup(resumable);
+  }
+
+  // The line closes once Twilio confirms that everything queued before the mark has been heard.
+  // `resumable`: an end_call the caller can take back by speaking again.
+  private beginHangup(resumable: boolean): void {
+    if (this.ended || this.pendingEndCallMark) return;
+    this.hangupRequestedAt = Date.now();
+    this.hangupResumable = resumable;
+    this.watchdog?.suspend(true);
     const markName = `end-call-${Date.now()}`;
     this.pendingEndCallMark = markName;
     this.callbacks.sendMark(markName);
     this.endCallFallbackTimer = setTimeout(() => {
       logger.warn("end_call mark not acknowledged in time, hanging up anyway", { markName });
       this.pendingEndCallMark = null;
-      this.callbacks.endCall();
+      this.finishHangup();
     }, END_CALL_MARK_FALLBACK_MS);
+  }
+
+  private cancelHangupIfCallerSpeaks(): void {
+    if (!this.pendingEndCallMark || !this.hangupResumable) return;
+    if (Date.now() - this.hangupRequestedAt < RESUME_GRACE_MS) return;
+    logger.info("caller spoke after end_call, keeping the call open", { event: "call.end_call_cancelled" });
+    this.pendingEndCallMark = null;
+    if (this.endCallFallbackTimer) { clearTimeout(this.endCallFallbackTimer); this.endCallFallbackTimer = null; }
+    this.hangupResumable = false;
+    this.watchdog?.suspend(false);
+  }
+
+  private finishHangup(): void {
+    this.end().catch((e) => logger.error("end_call session.end error", { err: e }));
+    this.callbacks.endCall();
+  }
+
+  /** Makes the assistant say exactly this sentence now; the call goes on afterwards. */
+  private speakFixed(text: string): void {
+    if (this.ended || !this.speech) return;
+    this.speech.say(text);
+    this.history.push({ role: "assistant", content: text });
+    this.logger.handleOpenAIEvent({ type: "response.output_text.done", text });
+  }
+
+  /** Says a sentence, waits until it has been heard, then hangs up (silence, call-length limit). */
+  private async sayAndHangUp(text: string, reason: EndReason): Promise<void> {
+    if (this.ended) return;
+    this.endReason = reason;
+    this.watchdog?.suspend(true);
+    this.abortTurn();
+    this.speakFixed(text);
+    await this.speech?.drained();
+    this.beginHangup(false);
   }
 
   handleTwilioMark(name: string): void {
     if (name !== this.pendingEndCallMark) return;
     this.pendingEndCallMark = null;
     if (this.endCallFallbackTimer) { clearTimeout(this.endCallFallbackTimer); this.endCallFallbackTimer = null; }
-    logger.info("end_call goodbye audio confirmed played, hanging up", { markName: name });
-    this.callbacks.endCall();
+    logger.info("end_call goodbye audio confirmed played, hanging up", { markName: name, reason: this.endReason });
+    this.finishHangup();
   }
 
   /** Close everything without writing the call (the engine could not start; the call row is removed). */
   async abort(): Promise<void> {
+    this.watchdog?.stop();
     this.ended = true;
     this.abortTurn();
     this.speech?.close();
@@ -458,6 +535,7 @@ export class PipelineCallSession implements VoiceSession {
   async end(): Promise<void> {
     if (this.ended) return;
     this.ended = true;
+    this.watchdog?.stop();
     this.abortTurn();
     logger.info("session ending, generating summary", { event: "call.ending" });
     this.speech?.close();
@@ -480,6 +558,7 @@ export class PipelineCallSession implements VoiceSession {
       logger: this.logger, settings: this.settings, projectId: this.projectId, callerPhone: this.callerPhone, twilioCallSid: this.twilioCallSid,
       promptSnapshot: this.promptSnapshot, confirmedBookings: this.confirmedBookings, bookingMade: this.bookingMade,
       searchEmbeddingTokens: this.embeddingTokens, quality: this.quality.finish(), usageDetail: detail,
+      endReason: this.endReason,
     });
   }
 }

@@ -110,7 +110,7 @@ describe("buildLiveSessionStart", () => {
   });
 
   it("does not mention end_call to the backend when that capability is off", () => {
-    const { message } = buildLiveSessionStart(settings({ capabilities: { enquiries: true } }), null);
+    const { message } = buildLiveSessionStart(settings({ capabilities: { enquiries: true, end_call: false } }), null);
     const backend = (message["session"] as StartSession).delegation.responses.instructions;
     expect(backend).not.toContain("end_call");
   });

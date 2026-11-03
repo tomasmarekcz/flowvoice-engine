@@ -31,6 +31,8 @@ export interface AssistantSettings {
   greeting_enabled: boolean;
   greeting_message: string | null;
   knowledge_top_n: number | null;
+  // Longest call in minutes (LEA-160); missing = 10.
+  max_call_minutes?: number | null;
   _owner_email?: string | null;
   // Joined from projects table
   _project_name?: string | null;

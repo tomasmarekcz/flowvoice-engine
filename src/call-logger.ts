@@ -230,6 +230,29 @@ export class CallLogger {
     }
   }
 
+  /** Why the call ended when it was not the caller hanging up (LEA-158/160). Separate write for the same reason as saveQuality. */
+  async saveEndReason(reason: string): Promise<void> {
+    if (!this.enabled || !this.callId) return;
+    try {
+      const res = await fetch(`${getSupabaseUrl()}/rest/v1/calls?id=eq.${this.callId}`, {
+        method: "PATCH",
+        headers: { ...getSupabaseHeaders(), Prefer: "return=minimal" },
+        body: JSON.stringify({ end_reason: reason }),
+      });
+      if (!res.ok) logger.warn("saveEndReason rejected", { event: "call.end_reason_not_saved", status: res.status });
+      // A call cut short by a technical problem needs the owner's follow-up ("Need action" in the dashboard).
+      if (reason === "technical_error") {
+        await fetch(`${getSupabaseUrl()}/rest/v1/calls?id=eq.${this.callId}`, {
+          method: "PATCH",
+          headers: { ...getSupabaseHeaders(), Prefer: "return=minimal" },
+          body: JSON.stringify({ status: "follow-up" }),
+        });
+      }
+    } catch (e) {
+      logger.error("saveEndReason error", { err: e });
+    }
+  }
+
   /** The engine could not start and another one answers: the half-made call row would be a duplicate. */
   async discardCall(): Promise<void> {
     if (!this.enabled || !this.callId) return;

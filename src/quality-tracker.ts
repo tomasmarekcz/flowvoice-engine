@@ -14,6 +14,8 @@ export interface QualityStats {
   tool_problems: number;
   /** Connection to OpenAI lost while the call was still running. */
   disconnects: number;
+  /** Lost connections that were re-made so the call could go on (LEA-160). */
+  reconnects: number;
   /** The call started on Standard because Live could not start. */
   fallback: boolean;
   /** Milliseconds from the start of the call to the first sound of the assistant (null: it never spoke). */
@@ -51,7 +53,7 @@ export function toolResultFailed(result: unknown): boolean {
 
 export class CallQualityTracker {
   private stats: QualityStats = {
-    interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, fallback: false,
+    interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, reconnects: 0, fallback: false,
     first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
   };
   private readonly startedAt: number;
@@ -181,6 +183,14 @@ export class CallQualityTracker {
     this.safely(() => {
       this.stats.disconnects++;
       this.emit("quality.disconnect", { code });
+    });
+  }
+
+  /** A lost connection to OpenAI was made again and the call went on. */
+  reconnected(): void {
+    this.safely(() => {
+      this.stats.reconnects++;
+      this.emit("quality.reconnected", {});
     });
   }
 

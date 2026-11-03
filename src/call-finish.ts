@@ -4,6 +4,7 @@
 import { CallLogger, type UsageDetail, generateCallSummary, maybeCreatePostCallEnquiry, prepareEnquiryCheck, type SmsOptions, type TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import type { AssistantSettings } from "./config";
 import { logger } from "./logger";
+import { withTechnicalNotice, type EndReason } from "./call-ending";
 import type { PromptSnapshot } from "./prompts/core";
 import { recordUsage } from "./prompts/store";
 import { sendSmsNotifications, shouldSkipCallSms } from "./sms";
@@ -25,6 +26,8 @@ export interface FinishContext {
   searchEmbeddingTokens: number;
   quality: QualityStats;
   usageDetail: UsageDetail;
+  /** Why the call ended when it was not the caller (LEA-158/160). */
+  endReason?: EndReason;
 }
 
 export async function finishCall(ctx: FinishContext): Promise<void> {
@@ -34,15 +37,16 @@ export async function finishCall(ctx: FinishContext): Promise<void> {
   const skipSms = shouldSkipCallSms(callLog.callDurationSeconds, callLog.transcript);
   if (skipSms) logger.info("skipping SMS: short call or caller said nothing", { seconds: callLog.callDurationSeconds });
 
+  const technicalEnd = ctx.endReason === "technical_error";
   const { testCall, plan } = await planTestCallNotifications(ctx.twilioCallSid, ctx.projectId, callLog.callId, skipSms);
 
   const smsOptions: SmsOptions | undefined = settings
     ? {
-        smsOwnerEnabled: !skipSms && (plan.forceGenerate || (settings.sms_owner_enabled ?? false)),
+        smsOwnerEnabled: (!skipSms || technicalEnd) && (plan.forceGenerate || (settings.sms_owner_enabled ?? false)),
         smsCallerEnabled: !skipSms && (settings.sms_caller_enabled ?? false),
         smsOwnerInstructions: settings.sms_owner_instructions ?? null,
         smsCallerInstructions: settings.sms_caller_instructions ?? null,
-        emailOwnerEnabled: !skipSms && (plan.forceGenerate || (settings.email_owner_enabled ?? false)),
+        emailOwnerEnabled: (!skipSms || technicalEnd) && (plan.forceGenerate || (settings.email_owner_enabled ?? false)),
         confirmedBookings: ctx.confirmedBookings.length > 0 ? bookingsForSummary(ctx.confirmedBookings, settings._calendar_timezone ?? "Europe/Prague") : null,
       }
     : undefined;
@@ -50,10 +54,15 @@ export async function finishCall(ctx: FinishContext): Promise<void> {
   const enquiryRules = await prepareEnquiryCheck(settings, callLog.callId, ctx.projectId);
 
   const {
-    title, summary, ownerSms, callerSms, emailOwner, summaryInputTokens, summaryOutputTokens,
+    title, summary, ownerSms: ownerSmsRaw, callerSms, emailOwner: emailOwnerRaw, summaryInputTokens, summaryOutputTokens,
     shouldCreateEnquiry, enquiryTitle, enquiryDescription, enquiryCustomerName, enquiryCustomerEmail,
   } = await generateCallSummary(apiKey, callLog.transcript, smsOptions, settings?._project_language ?? null, enquiryRules, ctx.promptSnapshot);
   recordUsage(ctx.promptSnapshot.usedVersionIds());
+  // LEA-158/160: a call cut short by a technical problem says so in the notifications the owner already gets.
+  const { ownerSms, emailOwner } = withTechnicalNotice({
+    technical: technicalEnd, ownerSms: ownerSmsRaw, emailOwner: emailOwnerRaw,
+    ownerEnabled: !!settings?.sms_owner_enabled, emailEnabled: !!settings?.email_owner_enabled, lang: settings?._project_language ?? null,
+  });
 
   await maybeCreatePostCallEnquiry({
     shouldCreate: shouldCreateEnquiry,
@@ -74,6 +83,7 @@ export async function finishCall(ctx: FinishContext): Promise<void> {
         callId: callLog.callId,
         lang: settings?._project_language ?? null,
         booking: bookingBlock,
+        technicalError: technicalEnd,
       })
     : null;
 
@@ -105,6 +115,7 @@ export async function finishCall(ctx: FinishContext): Promise<void> {
   await callLog.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSmsFinal, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
   await callLog.saveQuality(ctx.quality);
   await callLog.saveUsageDetail(ctx.usageDetail);
+  if (ctx.endReason && ctx.endReason !== "caller") await callLog.saveEndReason(ctx.endReason);
 
   if (plan.send && (plan.forceGenerate || settings?.email_owner_enabled) && emailOwner && callLog.callId) {
     const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";

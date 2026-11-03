@@ -125,6 +125,44 @@ Your answers are read aloud on the phone by a voice. Write them exactly as they 
     "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
     `I'm sorry, a technical problem means I can't hear you properly. Please call again in a moment. Thank you, goodbye.`),
 
+  // LEA-160: fixed sentences the engine makes the assistant say. Shown to the caller word for word.
+  silenceAskCs: def("call.silence_ask_cs", "Ticho v hovoru: otázka „Jste tam ještě?“ (česky)",
+    "Když volající 6 sekund nic neřekne po tom, co asistent domluvil. Asistent řekne tuto větu.", "during_call",
+    `Jste tam ještě?`),
+  silenceAskEn: def("call.silence_ask_en", "Ticho v hovoru: otázka „Jste tam ještě?“ (anglicky)",
+    "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
+    `Are you still there?`),
+  silenceByeCs: def("call.silence_bye_cs", "Ticho v hovoru: rozloučení před zavěšením (česky)",
+    "Když volající neodpoví ani na otázku „Jste tam ještě?“ (dalších 6 sekund). Asistent řekne tuto větu a hovor zavěsí.", "during_call",
+    `Zdá se, že vás neslyším, takže hovor ukončím. Kdybyste cokoli potřebovali, zavolejte prosím znovu. Na shledanou.`),
+  silenceByeEn: def("call.silence_bye_en", "Ticho v hovoru: rozloučení před zavěšením (anglicky)",
+    "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
+    `I can't hear you, so I'll end the call now. If you need anything, please call again. Goodbye.`),
+  limitWarningCs: def("call.limit_warning_cs", "Limit délky hovoru: upozornění minutu před koncem (česky)",
+    "Minutu před koncem maximální délky hovoru (nastavení firmy, výchozí 10 minut). Hovor pokračuje.", "during_call",
+    `Jen upozorním, že hovor se za minutu automaticky ukončí. Pokud potřebujete ještě něco vyřídit, řekněte mi to prosím hned.`),
+  limitWarningEn: def("call.limit_warning_en", "Limit délky hovoru: upozornění minutu před koncem (anglicky)",
+    "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
+    `Just a heads-up: this call will end automatically in one minute. If there is anything else you need, please tell me now.`),
+  limitByeCs: def("call.limit_bye_cs", "Limit délky hovoru: rozloučení v čase limitu (česky)",
+    "Když uplyne maximální délka hovoru. Asistent řekne tuto větu a hovor zavěsí.", "during_call",
+    `Bohužel nám došel čas hovoru, takže se musíme rozloučit. Kdybyste cokoli potřebovali, zavolejte prosím znovu. Na shledanou.`),
+  limitByeEn: def("call.limit_bye_en", "Limit délky hovoru: rozloučení v čase limitu (anglicky)",
+    "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
+    `I'm afraid we've run out of call time, so I need to say goodbye. If you need anything else, please call again. Goodbye.`),
+  reconnectedCs: def("call.reconnected_cs", "Obnovené spojení s OpenAI (česky)",
+    "Když spojení s OpenAI uprostřed hovoru spadlo a podařilo se ho obnovit. Asistent řekne tuto větu a naváže, kde skončil.", "during_call",
+    `Omlouvám se za chvilkový výpadek. Pokračujeme.`),
+  reconnectedEn: def("call.reconnected_en", "Obnovené spojení s OpenAI (anglicky)",
+    "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
+    `Sorry about the short interruption. Let's carry on.`),
+
+  // LEA-158: how a call ends (Standard voice and Hybrid; the Live voice and the Custom chain have their own wording).
+  callEndingRule: def("call.ending_rule", "Ukončení hovoru: pravidlo pro asistenta (Standard hlas)",
+    "V hovoru s hlasem Standard, Hybrid a ve Vlastním řetězci, když má firma zapnuté ukončení hovoru (výchozí). Říká, kdy se rozloučit a zavěsit.", "during_call",
+    `===ENDING THE CALL===
+The caller always has the last word. When everything is handled, briefly recap what was agreed and ask whether there is anything else. When the caller says no, thanks or goodbye, say a short goodbye and call end_call in that same turn. Never hang up while the caller is still talking or waiting for something. Never leave the line open after saying goodbye.`),
+
   callBusinessContextIntro: def("call.business_context_intro", "Úvod k údajům o firmě (Standard hlas)",
     "V každém hovoru před výčtem údajů o firmě (název, obor, popis, web, služby). Říká asistentovi, že jde o fakta, ne o pokyny.", "during_call",
     `===BUSINESS CONTEXT===
@@ -404,10 +442,15 @@ export const ENGINE_TOOLS = {
     { query: "A concise natural-language search query describing what the customer wants to know." }),
 
   end_call: tool("end_call",
-    "Asistent ho vidí v hovoru, když má firma zapnuté ukončení hovoru. Podle popisu se rozhoduje, kdy hovor zavěsit; poslední slovo má vždy volající.",
-    "End the phone call. The caller always has the last word: call this ONLY after you have summarised what was agreed, asked if there is anything else, and the caller has answered with a goodbye or a clear no. Never call it in the same turn as a question or a promise, and never while something the caller asked for (a confirmation email or SMS, a callback, an answer you still owe) is not done yet. Do not write any goodbye text yourself: the voice assistant says it.",
+    "Asistent ho vidí v hovoru, když má firma ukončení hovoru zapnuté (výchozí). Podle popisu se rozhoduje, kdy hovor zavěsit; poslední slovo má vždy volající.",
+    "End the phone call. Call this in the same turn in which you say your goodbye, once the caller has shown they need nothing else (for example \"no\", \"that's all\", \"thank you\", \"goodbye\"). Say the goodbye first, then call end_call. Do not call it while the caller is still asking something, or while something you promised (a booking, an SMS or e-mail confirmation, an answer you still owe) is not done yet. If the caller speaks again after the goodbye, the call simply continues.",
     [],
-    { reason: "What was handled and how the caller closed the call (e.g. 'appointment booked, caller said goodbye', 'enquiry logged, caller needs nothing else')." }),
+    { reason: "Short note: what was handled and how the caller closed the call (e.g. 'appointment booked, caller said goodbye')." }),
+  end_call_live: tool("end_call_live",
+    "Totéž co end_call, ale pro hlas Live: rozloučení říká hlas, funkci volá „mozek“ na jeho žádost.",
+    "End the phone call. Call this when the voice model asks you to end the call because the caller said goodbye or needs nothing else, and every request the caller made is done. Do not write any goodbye text yourself: the voice model says it. If a request is still open, do not call it; finish the request first.",
+    [],
+    { reason: "Short note: what was handled and how the caller closed the call (e.g. 'appointment booked, caller said goodbye')." }),
 };
 
 export const ALL_ENGINE_PROMPTS: PromptDef[] = [

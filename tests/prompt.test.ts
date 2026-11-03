@@ -112,12 +112,23 @@ describe("buildTools", () => {
     expect(tools.map((t) => t.name)).toContain("web_search");
   });
 
-  it("end_call only fires after the caller has the last word and nothing is left open", () => {
+  it("end_call is called with the goodbye, and only when nothing is left open", () => {
     const tools = buildTools({ ...BASE, capabilities: { end_call: true } });
     const endCall = tools.find((t) => t.name === "end_call")!;
-    expect(endCall.description).toContain("last word");
-    expect(endCall.description).toContain("ONLY after");
-    expect(endCall.description).toContain("confirmation email");
+    expect(endCall.description).toContain("same turn");
+    expect(endCall.description).toContain("goodbye");
+    expect(endCall.description).toContain("Do not call it while");
+  });
+
+  it("end_call is on by default (LEA-158): with no setting, with the key missing, and only off when switched off", () => {
+    expect(buildTools(null).some((t) => t.name === "end_call")).toBe(true);
+    expect(buildTools({ ...BASE, capabilities: { calendar: true } }).some((t) => t.name === "end_call")).toBe(true);
+    expect(buildTools({ ...BASE, capabilities: { end_call: false } }).some((t) => t.name === "end_call")).toBe(false);
+  });
+
+  it("the Live backend gets its own wording: the voice says the goodbye, the backend does not", () => {
+    const tools = buildTools({ ...BASE, capabilities: { end_call: true } }, undefined, { live: true });
+    expect(tools.find((t) => t.name === "end_call")!.description).toContain("Do not write any goodbye text yourself");
   });
 
   it("includes domain restriction in web_search description when domains configured", () => {

@@ -4,6 +4,8 @@ import { recordUsage } from "./prompts/store";
 import { CallLogger, generateCallSummary, maybeCreatePostCallEnquiry, prepareEnquiryCheck, SmsOptions, TokenUsage, ZERO_TOKEN_USAGE } from "./call-logger";
 import type { AssistantSettings } from "./config";
 import { logger } from "./logger";
+import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, speaksEnglish, withTechnicalNotice, type EndReason } from "./call-ending";
+import { fallbackClip } from "./fallback-audio";
 import { bindToCurrentContext } from "./log/context";
 import {
   LIVE_ENDPOINT,
@@ -31,13 +33,16 @@ const START_TIMEOUT_MS = 6000;
 // The goodbye may still be streaming when end_call arrives, so wait for a quiet gap
 // before asking Twilio to confirm playback, then hang up on the echoed mark.
 const END_CALL_IDLE_MS = 1200;
-const END_CALL_MARK_FALLBACK_MS = 15000;
 // Streaming audio that never goes quiet must not keep the line open: after end_call,
 // ask Twilio to confirm playback at the latest this long after the request.
 const END_CALL_MAX_WAIT_MS = 6000;
 // The caller's own goodbye can be transcribed a moment after end_call arrives, so only
 // speech later than this counts as the caller wanting to continue.
-const END_CALL_RESUME_GRACE_MS = 1500;
+const MAX_RECONNECTS = 2;
+const RECONNECT_TIMEOUT_MS = 6000;
+const RESUME_TRANSCRIPT_TURNS = 40;
+// A fixed sentence (silence, limit) that is due while the assistant is talking waits for this long at most.
+const FIXED_SENTENCE_MAX_WAIT_MS = 8000;
 
 export interface LiveSessionDeps {
   connect?: (url: string, apiKey: string) => WebSocket;
@@ -67,6 +72,8 @@ export class LiveCallSession implements VoiceSession {
   private readyAt = 0;
   private firstAudioLogged = false;
   private ended = false;
+  // Why the call ended when it was not the caller hanging up (LEA-158/160).
+  private endReason: EndReason = "caller";
   private hangupRequested = false;
   private hangupMarkSent = false;
   private pendingEndCallMark: string | null = null;
@@ -75,6 +82,13 @@ export class LiveCallSession implements VoiceSession {
   private hangupRequestedAt = 0;
   private fallbackTimer: NodeJS.Timeout | null = null;
   private finalizePromise: Promise<void> | null = null;
+  // Keeping watch over the call and re-making a lost connection (LEA-158/160).
+  private watchdog: CallWatchdog | null = null;
+  private hangupFinal = false; // a hang-up that the caller speaking can no longer take back (silence, limit, error)
+  private startMessage: Record<string, unknown> | null = null;
+  private reconnecting = false;
+  private resumeWaiter: { resolve: () => void; reject: (e: Error) => void } | null = null;
+  private assistantTail = ""; // the last words the assistant said, to spot a goodbye
   private embeddingTokens = 0;
   private markStarted: (() => void) | null = null;
   private failStart: ((err: Error) => void) | null = null;
@@ -108,6 +122,7 @@ export class LiveCallSession implements VoiceSession {
     const { message } = buildLiveSessionStart(this.settings, this.callerPhone, this.promptSnapshot);
     recordUsage(this.promptSnapshot.usedVersionIds());
     this.logger.openaiPayload = message["session"];
+    this.startMessage = message;
 
     const connectStartedAt = Date.now();
     logger.info("connecting to OpenAI Live", { project_id: this.projectId ?? "none" });
@@ -122,25 +137,7 @@ export class LiveCallSession implements VoiceSession {
       () => this.failStart?.(new Error("OpenAI Live session start timed out")),
       START_TIMEOUT_MS
     );
-
-    // WebSocket callbacks do not inherit async context: bind each to the call's log context.
-    ws.on("open", bindToCurrentContext(() => ws.send(JSON.stringify(message))));
-    ws.on("message", bindToCurrentContext((data) => {
-      this.handleMessage(data.toString()).catch((e) => logger.error("handleMessage error", { err: e }));
-    }));
-    ws.on("close", bindToCurrentContext((code: number) => {
-      this.failStart?.(new Error(`OpenAI Live closed before start (code ${code})`));
-      logger.warn("OpenAI Live disconnected", { event: "openai.closed", code });
-      if (!this.ended) {
-        this.quality.disconnected(code);
-        this.callbacks.sendJson({ type: "error", message: `OpenAI Live disconnected (code ${code})` });
-      }
-    }));
-    ws.on("error", bindToCurrentContext((e: Error) => {
-      this.failStart?.(e);
-      logger.error("OpenAI Live WS error", { event: "openai.ws_error", err: e });
-      this.callbacks.sendJson({ type: "error", message: `OpenAI Live error: ${e.message}` });
-    }));
+    this.attachSocket(ws, message);
 
     try {
       await ready;
@@ -155,6 +152,140 @@ export class LiveCallSession implements VoiceSession {
     // Only create the calls row once Live is confirmed, so a fallback to Standard
     // never leaves a duplicate row behind. createCall never throws.
     await this.logger.createCall(this.callerPhone);
+    this.watchdog = new CallWatchdog({
+      speak: (text) => this.speakFixed(text),
+      sayAndHangUp: (text, reason) => this.sayAndHangUp(text, reason),
+      hangUp: (reason) => { this.endReason = reason; this.hangupFinal = true; this.sendHangupMark(); },
+      texts: fixedTexts(this.settings, this.promptSnapshot),
+    }, this.twilioCallSid ? maxCallMs(this.settings) : 24 * 60 * 60_000); // a test call keeps its own time limit
+    this.watchdog.start();
+  }
+
+  // ─── The connection to OpenAI Live ──────────────────────────────────────────────
+
+  private attachSocket(ws: WebSocket, message: Record<string, unknown>): void {
+    // WebSocket callbacks do not inherit async context: bind each to the call's log context.
+    ws.on("open", bindToCurrentContext(() => ws.send(JSON.stringify(message))));
+    ws.on("message", bindToCurrentContext((data) => {
+      if (ws !== this.ws) return; // an old connection
+      this.handleMessage(data.toString()).catch((e) => logger.error("handleMessage error", { err: e }));
+    }));
+    ws.on("close", bindToCurrentContext((code: number) => {
+      if (ws !== this.ws) return;
+      this.failStart?.(new Error(`OpenAI Live closed before start (code ${code})`));
+      logger.warn("OpenAI Live disconnected", { event: "openai.closed", code });
+      if (this.ended) return;
+      this.resumeWaiter?.reject(new Error(`closed before ready (code ${code})`));
+      if (this.started || this.reconnecting) this.onConnectionLost(code);
+      else {
+        this.quality.disconnected(code);
+        this.callbacks.sendJson({ type: "error", message: `OpenAI Live disconnected (code ${code})` });
+      }
+    }));
+    ws.on("error", bindToCurrentContext((e: Error) => {
+      if (ws !== this.ws) return;
+      this.failStart?.(e);
+      logger.error("OpenAI Live WS error", { event: "openai.ws_error", err: e });
+      this.callbacks.sendJson({ type: "error", message: `OpenAI Live error: ${e.message}` });
+    }));
+  }
+
+  // The same session settings, plus what was said so far, so the new session neither greets again nor starts over.
+  private resumeMessage(): Record<string, unknown> {
+    const base = JSON.parse(JSON.stringify(this.startMessage)) as { session: { instructions: string; delegation: { responses: { instructions: string } } } };
+    const turns = this.transcript.entries.slice(-RESUME_TRANSCRIPT_TURNS)
+      .map((t) => `${t.role === "user" ? "Caller" : "Assistant"}: ${t.text}`).join("\n");
+    const note = `===CALL IN PROGRESS===\nThe connection dropped for a moment and was restored. The call is already under way: do NOT greet again and do not start over. This is what was said so far:\n${turns || "(nothing yet)"}\nContinue naturally from the last thing said.`;
+    base.session.instructions += `\n\n${note}`;
+    base.session.delegation.responses.instructions += `\n\n${note}`;
+    return base as unknown as Record<string, unknown>;
+  }
+
+  private onConnectionLost(code: number): void {
+    this.quality.disconnected(code);
+    this.callbacks.sendJson({ type: "error", message: `OpenAI Live disconnected (code ${code})` });
+    if (this.reconnecting) return;
+    void this.recoverConnection();
+  }
+
+  // The connection dropped in the middle of the call: say so, make it again (twice at most), and if that fails apologise and hang up.
+  private async recoverConnection(): Promise<void> {
+    this.reconnecting = true;
+    this.started = false; // the caller's words wait in the buffer until the new session is ready
+    this.watchdog?.suspend(true);
+    this.playClip("wait");
+    for (let attempt = 1; attempt <= MAX_RECONNECTS && !this.ended; attempt++) {
+      try {
+        await this.reconnectOnce();
+        this.reconnecting = false;
+        this.quality.reconnected();
+        logger.info("OpenAI Live connection restored", { event: "openai.reconnected", attempt });
+        this.watchdog?.suspend(false);
+        this.speakFixed(fixedTexts(this.settings, this.promptSnapshot).reconnected);
+        return;
+      } catch (e) {
+        logger.warn("OpenAI Live reconnect failed", { event: "openai.reconnect_failed", attempt, err: e });
+        try { this.ws?.close(); } catch { /* already closed */ }
+      }
+    }
+    if (this.ended) return;
+    this.reconnecting = false;
+    this.endReason = "technical_error";
+    this.hangupFinal = true;
+    this.watchdog?.stop();
+    this.playClip("apology");
+    this.hangupRequested = true;
+    this.sendHangupMark();
+  }
+
+  private reconnectOnce(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { this.resumeWaiter = null; reject(new Error("reconnect timed out")); }, RECONNECT_TIMEOUT_MS);
+      this.resumeWaiter = {
+        resolve: () => { clearTimeout(timer); this.resumeWaiter = null; resolve(); },
+        reject: (e) => { clearTimeout(timer); this.resumeWaiter = null; reject(e); },
+      };
+      const ws = this.connect(LIVE_ENDPOINT, process.env.OPENAI_API_KEY ?? "");
+      this.ws = ws;
+      this.attachSocket(ws, this.resumeMessage());
+    });
+  }
+
+  /** Plays a recorded sentence on the phone line (Live always speaks the phone's own format). */
+  private playClip(kind: "wait" | "apology"): void {
+    const lang = speaksEnglish(this.settings) ? "en" : "cs";
+    const clip = fallbackClip(kind, lang);
+    if (clip) this.callbacks.sendAudio(clip, "mulaw8");
+  }
+
+  // ─── Fixed sentences (LEA-160) ──────────────────────────────────────────────────
+
+  /** Makes the voice say exactly this sentence; if the assistant is talking right now it waits for a pause. */
+  private speakFixed(text: string, waited = 0): void {
+    if (this.ended || this.reconnecting) return;
+    if (this.watchdog?.assistantBusy() && waited < FIXED_SENTENCE_MAX_WAIT_MS) {
+      setTimeout(() => this.speakFixed(text, waited + 500), 500);
+      return;
+    }
+    this.send({
+      type: "session.instructions.append",
+      event_id: `fixed_${Date.now()}`,
+      delegation_id: null,
+      content: `SPEAK NOW: say exactly this sentence to the caller, word for word, once, and nothing else, then wait for the caller:\n\n"${text}"`,
+    });
+    this.send({ type: "response.create", event_id: `fixed_response_${Date.now()}` });
+  }
+
+  /** Says a sentence, then hangs up once it has been heard (silence, call-length limit). The caller cannot take it back. */
+  private sayAndHangUp(text: string, reason: EndReason): void {
+    if (this.ended) return;
+    this.endReason = reason;
+    this.hangupFinal = true;
+    this.hangupRequested = true;
+    this.hangupRequestedAt = Date.now();
+    this.speakFixed(text);
+    // The quiet-gap timer is armed by the sentence's own audio (see the audio handler); this is the backstop.
+    this.maxWaitTimer = setTimeout(() => this.sendHangupMark(), FIXED_SENTENCE_MAX_WAIT_MS + END_CALL_MAX_WAIT_MS);
   }
 
   handleClientAudio(mulawBase64: string): void {
@@ -227,7 +358,11 @@ export class LiveCallSession implements VoiceSession {
       // Live streams audio all the time, silent frames between sentences included (measured, LEA-155). Only real speech
       // counts as the assistant talking, for the quality numbers and for the "goodbye has gone quiet" hang-up timer.
       const speech = !isSilentMulaw(String(msg["delta"] ?? ""));
-      if (speech) this.quality.assistantAudio(audioDurationMs(String(msg["delta"] ?? ""), "mulaw8"));
+      if (speech) {
+        const ms = audioDurationMs(String(msg["delta"] ?? ""), "mulaw8");
+        this.quality.assistantAudio(ms);
+        this.watchdog?.assistantAudio(ms);
+      }
       this.callbacks.sendAudio(msg["delta"] as string, "mulaw8");
       if (speech && this.hangupRequested) this.armHangupTimer();
       return;
@@ -238,6 +373,7 @@ export class LiveCallSession implements VoiceSession {
 
     if (type === "session.started") {
       this.started = true;
+      this.resumeWaiter?.resolve();
       this.readyAt = Date.now();
       for (const frame of this.inputBuffer.drain()) this.send({ type: "session.input_audio.append", audio: frame });
       this.markStarted?.();
@@ -247,11 +383,18 @@ export class LiveCallSession implements VoiceSession {
       const delta = String(msg["delta"] ?? "");
       this.transcript.addDelta("user", delta);
       this.quality.callerTextDelta(delta);
-      if (delta.trim()) this.resumeIfCallerSpeaksAfterHangupRequest();
+      if (delta.trim()) {
+        this.assistantTail = "";
+        this.watchdog?.callerSpoke();
+        this.resumeIfCallerSpeaksAfterHangupRequest();
+      }
       return;
     }
     if (type === "session.output_transcript.delta") {
-      this.transcript.addDelta("assistant", String(msg["delta"] ?? ""));
+      const said = String(msg["delta"] ?? "");
+      this.transcript.addDelta("assistant", said);
+      this.assistantTail = (this.assistantTail + said).slice(-80);
+      this.watchdog?.assistantSaid(this.assistantTail);
       return;
     }
     if (type === "session.closed") {
@@ -281,6 +424,7 @@ export class LiveCallSession implements VoiceSession {
       this.sendToolResult(callId, { status: "ok" }, false);
       this.hangupRequested = true;
       this.hangupRequestedAt = Date.now();
+      this.watchdog?.suspend(true);
       // The summary and SMS run when the line actually closes (session.end), so a caller
       // who keeps talking does not get a call that was already finalized.
       this.armHangupTimer();
@@ -290,6 +434,7 @@ export class LiveCallSession implements VoiceSession {
 
     const t0 = Date.now();
     this.quality.toolStarted();
+    this.watchdog?.toolStarted();
     const { result, embeddingTokens } = await this.runTool(
       name,
       args,
@@ -301,6 +446,7 @@ export class LiveCallSession implements VoiceSession {
     );
     this.embeddingTokens += embeddingTokens;
     this.quality.toolFinished(name, Date.now() - t0, toolResultFailed(result));
+    this.watchdog?.toolFinished();
     if (name === "create_calendar_event") {
       const booking = confirmedBookingFromResult(result);
       if (booking) this.confirmedBookings.push(booking);
@@ -326,13 +472,14 @@ export class LiveCallSession implements VoiceSession {
 
   // The caller spoke after end_call was requested: keep the call open instead of cutting them off.
   private resumeIfCallerSpeaksAfterHangupRequest(): void {
-    if (!this.hangupRequested || this.ended) return;
-    if (Date.now() - this.hangupRequestedAt < END_CALL_RESUME_GRACE_MS) return;
+    if (!this.hangupRequested || this.ended || this.hangupFinal) return;
+    if (Date.now() - this.hangupRequestedAt < RESUME_GRACE_MS) return;
     logger.info("caller spoke after end_call, keeping the call open");
-    this.clearTimers();
+    this.clearHangupTimers();
     this.hangupRequested = false;
     this.hangupMarkSent = false;
     this.pendingEndCallMark = null;
+    this.watchdog?.suspend(false);
   }
 
   private sendHangupMark(): void {
@@ -353,6 +500,11 @@ export class LiveCallSession implements VoiceSession {
   }
 
   private clearTimers(): void {
+    this.watchdog?.stop();
+    this.clearHangupTimers();
+  }
+
+  private clearHangupTimers(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.fallbackTimer) clearTimeout(this.fallbackTimer);
     if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
@@ -375,11 +527,12 @@ export class LiveCallSession implements VoiceSession {
 
     // A test call from the QR code: the first one really sends the owner's SMS and e-mail, later ones only write them
     // into the call detail (same rules as the Standard session).
+    const technicalEnd = this.endReason === "technical_error";
     const { testCall, plan } = await planTestCallNotifications(this.twilioCallSid, this.projectId, this.logger.callId, skipSms);
 
     const smsOptions: SmsOptions | undefined = this.settings
       ? {
-          smsOwnerEnabled: !skipSms && (plan.forceGenerate || (this.settings.sms_owner_enabled ?? false)),
+          smsOwnerEnabled: (!skipSms || technicalEnd) && (plan.forceGenerate || (this.settings.sms_owner_enabled ?? false)),
           smsCallerEnabled: !skipSms && (this.settings.sms_caller_enabled ?? false),
           smsOwnerInstructions: this.settings.sms_owner_instructions ?? null,
           smsCallerInstructions: this.settings.sms_caller_instructions ?? null,
@@ -391,13 +544,18 @@ export class LiveCallSession implements VoiceSession {
     const enquiryRules = await prepareEnquiryCheck(this.settings, this.logger.callId, this.projectId);
 
     const {
-      title, summary, ownerSms, callerSms, emailOwner, summaryInputTokens, summaryOutputTokens,
+      title, summary, ownerSms: ownerSmsRaw, callerSms, emailOwner: emailOwnerRaw, summaryInputTokens, summaryOutputTokens,
       shouldCreateEnquiry, enquiryTitle, enquiryDescription, enquiryCustomerName, enquiryCustomerEmail,
     } = await generateCallSummary(
       apiKey, this.logger.transcript, smsOptions, this.settings?._project_language ?? null,
       enquiryRules, this.promptSnapshot
     );
     recordUsage(this.promptSnapshot.usedVersionIds());
+    // LEA-158/160: a call cut short by a technical problem says so in the notifications the owner already gets.
+    const { ownerSms, emailOwner } = withTechnicalNotice({
+      technical: technicalEnd, ownerSms: ownerSmsRaw, emailOwner: emailOwnerRaw,
+      ownerEnabled: !!this.settings?.sms_owner_enabled, emailEnabled: !!this.settings?.email_owner_enabled, lang: this.settings?._project_language ?? null,
+    });
 
     await maybeCreatePostCallEnquiry({
       shouldCreate: shouldCreateEnquiry,
@@ -418,6 +576,7 @@ export class LiveCallSession implements VoiceSession {
           callId: this.logger.callId,
           lang: this.settings?._project_language ?? null,
           booking: bookingBlock,
+        technicalError: technicalEnd,
         })
       : null;
 
@@ -451,6 +610,7 @@ export class LiveCallSession implements VoiceSession {
 
     await this.logger.finalizeCall(title, summary, ownerSent, callerSent, ownerSmsFinal, callerSmsFinal, emailOwner, tokenUsage, { owner: ownerSid, caller: callerSid });
     await this.logger.saveQuality(this.quality.finish());
+    if (this.endReason !== "caller") await this.logger.saveEndReason(this.endReason);
 
     if (plan.send && (plan.forceGenerate || this.settings?.email_owner_enabled) && emailOwner && this.logger.callId) {
       const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";

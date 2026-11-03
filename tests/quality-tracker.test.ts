@@ -245,7 +245,7 @@ describe("safety", () => {
 
   it("starts with all zeroes", () => {
     expect(setup().tracker.finish()).toEqual({
-      interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, fallback: false,
+      interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, reconnects: 0, fallback: false,
       first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
     });
   });

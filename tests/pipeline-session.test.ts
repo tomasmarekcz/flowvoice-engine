@@ -216,8 +216,10 @@ describe("PipelineCallSession", () => {
       await flush(20);
       expect(voice.spoken.join(" ")).toContain("technická chyba");
       expect(sent.marks).toHaveLength(1);
-      expect(h.finishCall).toHaveBeenCalledTimes(1); // the call is still saved with a summary
       session.handleTwilioMark(sent.marks[0]);
+      await flush(20);
+      expect(h.finishCall).toHaveBeenCalledTimes(1); // the call is still saved with a summary, and marked as ended by a technical problem
+      expect(h.finishCall.mock.calls[0][0].endReason).toBe("technical_error");
       expect(sent.endCall).toBe(1);
     });
 

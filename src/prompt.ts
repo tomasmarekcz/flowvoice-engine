@@ -3,6 +3,7 @@ import { buildEnquiryRules, enquiryDetailsNote, enquiryEmailNote } from "./enqui
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P, ENGINE_TOOLS as T } from "./prompts/registry";
 import { personaBlock } from "./persona";
+import { endCallEnabled } from "./call-ending";
 
 export interface OpenAITool {
   type: "function";
@@ -83,7 +84,7 @@ function languageName(value: string): string {
 export function buildPromptFromSettings(
   settings: AssistantSettings | null,
   callerPhone?: string | null,
-  opts: { includeGreeting?: boolean } = {},
+  opts: { includeGreeting?: boolean; includeEnding?: boolean } = {},
   snapshot: PromptSnapshot = emptySnapshot()
 ): string {
   const sections: string[] = [
@@ -97,6 +98,8 @@ export function buildPromptFromSettings(
   if (settings && !calendarOn) sections.push(snapshot.text(P.callBookingEnquiryOnly));
   const instructions = buildBusinessInstructions(settings, snapshot);
   if (instructions) sections.push(instructions);
+  // LEA-158: how to end the call (Live's backend has its own rule, so it asks for no ending rule here).
+  if (opts.includeEnding !== false && endCallEnabled(settings)) sections.push(snapshot.text(P.callEndingRule));
   if (opts.includeGreeting !== false) {
     const greeting = buildGreetingRule(settings, snapshot);
     if (greeting) sections.push(greeting);
@@ -104,7 +107,7 @@ export function buildPromptFromSettings(
   return sections.join("\n\n");
 }
 
-export function buildTools(settings: AssistantSettings | null, snapshot: PromptSnapshot = emptySnapshot()): OpenAITool[] {
+export function buildTools(settings: AssistantSettings | null, snapshot: PromptSnapshot = emptySnapshot(), opts: { live?: boolean } = {}): OpenAITool[] {
   const caps = settings?.capabilities ?? { calendar: true, lead_collection: true };
   const calendarProjectId = settings?._calendar_project_id ?? "admin-test";
   const tools: OpenAITool[] = [];
@@ -242,15 +245,16 @@ export function buildTools(settings: AssistantSettings | null, snapshot: PromptS
     });
   }
 
-  if (caps["end_call"]) {
+  // LEA-158: on unless the customer switched it off. A call must be able to end.
+  if (endCallEnabled(settings)) {
     tools.push({
       type: "function",
       name: "end_call",
-      description: describe("end_call"),
+      description: describe(opts.live ? "end_call_live" : "end_call"),
       parameters: {
         type: "object",
         properties: {
-          reason: param("end_call", "reason", "string"),
+          reason: param(opts.live ? "end_call_live" : "end_call", "reason", "string"),
         },
         required: ["reason"],
       },
