@@ -87,7 +87,7 @@ to `response.done` events for `input_token_details` / `output_token_details`
 returned by each `executeTool` call; passes the assembled `TokenUsage`
 object to `finalizeCall()` at call end.
 
-This is the **Standard** voice engine (`gpt-realtime-2`). It implements
+This is the **Standard** voice engine (`gpt-realtime-2.1`). It implements
 `VoiceSession`. Its audio format with OpenAI is chosen per call by the last
 constructor argument (`CallSessionOptions.audio`): `"pcmu"` (the phone line's own
 mu-law 8 kHz, `audioFormat` is `"mulaw8"`, nothing is converted; used for Twilio
@@ -459,6 +459,7 @@ Time is injectable for tests.
 ## pipeline-session.ts, pipeline/responses-llm.ts, call-finish.ts (LEA-165)
 
 **What it does:** `PipelineCallSession` is the own chain: caller audio goes to a transcription-only Realtime session, each finished utterance runs a streamed `gpt-5.6-luna` turn through the Responses API (`pipeline/responses-llm.ts`, tool loop up to 6 rounds, filler sentence after 1.2 s of tool waiting), the text goes to the voice layer. Barge-in trims the history to the heard text. `call-finish.ts` is the post-call step (summary, enquiry, SMS/e-mail, finalize, quality, usage detail) used by it.
+**When things go wrong:** if speech recognition drops during the call it is reconnected once (caller audio is held in `InputBuffer` meanwhile); a second drop makes the assistant say `speech.connection_lost_*` and hang up, and the call is still saved. If the caller spoke for at least 0.7 s but the transcript is empty (or transcription failed), the assistant says `speech.unclear_*` (max twice in a row); shorter sounds are ignored as noise. A broken voice is restarted once. The sentences are in the prompt registry. Tests: `tests/pipeline-session.test.ts` (fake recognition socket, model and voice).
 **Depended on by:** `session-factory.ts` (Hybrid and Pipeline start with a fallback to Standard, `fallbackReason`).
 
 ## input-buffer.ts (LEA-155)

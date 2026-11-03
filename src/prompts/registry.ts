@@ -109,6 +109,22 @@ Your answers are read aloud on the phone by a voice. Write them exactly as they 
     "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
     `One moment, let me check.`),
 
+  unclearCs: def("speech.unclear_cs", "Nerozuměl jsem (česky)",
+    "Ve Vlastním řetězci, když volající mluvil, ale přepis hovoru vyšel prázdný (šum, nezřetelná řeč). Asistent řekne tuto větu a požádá o zopakování.", "during_call",
+    `Promiňte, nerozuměl jsem. Můžete to prosím zopakovat?`),
+
+  unclearEn: def("speech.unclear_en", "Nerozuměl jsem (anglicky)",
+    "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
+    `Sorry, I didn't catch that. Could you please say it again?`),
+
+  connectionLostCs: def("speech.connection_lost_cs", "Výpadek rozpoznávání řeči (česky)",
+    "Ve Vlastním řetězci, když se rozpoznávání řeči přerušilo a nepodařilo se ho obnovit. Asistent řekne tuto větu a hovor ukončí; hovor se uloží se vším, co do té doby zaznělo.", "during_call",
+    `Omlouvám se, nastala technická chyba a špatně vás slyším. Zkuste prosím zavolat znovu za chvíli. Děkuji a na shledanou.`),
+
+  connectionLostEn: def("speech.connection_lost_en", "Výpadek rozpoznávání řeči (anglicky)",
+    "Totéž jako česká věta, pro asistenta mluvícího anglicky.", "during_call",
+    `I'm sorry, a technical problem means I can't hear you properly. Please call again in a moment. Thank you, goodbye.`),
+
   callBusinessContextIntro: def("call.business_context_intro", "Úvod k údajům o firmě (Standard hlas)",
     "V každém hovoru před výčtem údajů o firmě (název, obor, popis, web, služby). Říká asistentovi, že jde o fakta, ne o pokyny.", "during_call",
     `===BUSINESS CONTEXT===

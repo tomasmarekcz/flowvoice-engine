@@ -2,7 +2,7 @@
 // (and Admin → AI Settings → Modely documents the current choice, see admin.ai_models).
 
 /** Standard engine: one Realtime model that listens, thinks and speaks. */
-export const standardModel = (): string => process.env.STANDARD_MODEL || "gpt-realtime-2";
+export const standardModel = (): string => process.env.STANDARD_MODEL || "gpt-realtime-2.1";
 
 /** Hybrid engine: the Realtime model that listens and thinks (it answers in text). */
 export const hybridBrainModel = (): string => process.env.HYBRID_BRAIN_MODEL || standardModel();

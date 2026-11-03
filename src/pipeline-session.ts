@@ -30,6 +30,10 @@ const STT_START_TIMEOUT_MS = 6000;
 const TOOL_FILLER_MS = 1200;
 const MAX_TOOL_ROUNDS = 6;
 const END_CALL_MARK_FALLBACK_MS = 15000;
+// Speech this long with an empty transcript is a person talking that we did not understand (shorter is noise or a click).
+const UNCLEAR_MIN_SPEECH_MS = 700;
+// After this many "I didn't catch that" in a row the assistant stops asking and waits.
+const MAX_UNCLEAR_IN_ROW = 2;
 
 export interface PipelineOptions {
   /** Audio format of the caller's side: "pcmu" (phone line, default on Twilio) or PCM 24 kHz (browser test call). */
@@ -74,6 +78,12 @@ export class PipelineCallSession implements VoiceSession {
   private bookingMade = false;
   private embeddingTokens = 0;
   private voiceRecoveries = 0;
+  private sttRecoveries = 0;
+  private givingUp = false;
+  private apiKey = "";
+  private speechStartedAt = 0;
+  private lastSpeechMs = 0;
+  private unclearInRow = 0;
   private usage = {
     llmInput: 0, llmCachedInput: 0, llmOutput: 0,
     voiceAudioOut: 0, voiceTextIn: 0, voiceChars: 0,
@@ -97,6 +107,7 @@ export class PipelineCallSession implements VoiceSession {
   async start(): Promise<void> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+    this.apiKey = apiKey;
     refreshExternalCalendars(this.projectId);
 
     const callCreated = this.logger.createCall(this.callerPhone);
@@ -142,6 +153,7 @@ export class PipelineCallSession implements VoiceSession {
     const language = effectiveLanguage(settings);
     const vocabulary = [settings?._project_name, ...(settings?._service_names ?? [])].filter(Boolean).join(", ");
     return new Promise<void>((resolve, reject) => {
+      let started = false;
       const timer = setTimeout(() => reject(new Error("speech recognition start timed out")), STT_START_TIMEOUT_MS);
       ws.on("open", bindToCurrentContext(() => {
         ws.send(JSON.stringify({
@@ -168,6 +180,7 @@ export class PipelineCallSession implements VoiceSession {
         try { msg = JSON.parse(data.toString()); } catch { return; }
         if (msg["type"] === "session.updated" && !this.listening) {
           clearTimeout(timer);
+          started = true;
           this.listening = true;
           for (const frame of this.inputBuffer.drain()) this.sendInput(frame);
           resolve();
@@ -175,18 +188,12 @@ export class PipelineCallSession implements VoiceSession {
         this.handleSttEvent(msg);
       }));
       ws.on("error", bindToCurrentContext((e: Error) => {
-        clearTimeout(timer);
         logger.error("speech recognition socket error", { event: "stt.ws_error", err: e });
-        reject(e);
+        if (!started) { clearTimeout(timer); reject(e); }
       }));
       ws.on("close", bindToCurrentContext((code: number) => {
-        clearTimeout(timer);
-        reject(new Error(`speech recognition closed (code ${code})`));
-        logger.warn("speech recognition disconnected", { event: "stt.closed", code });
-        if (!this.ended) {
-          this.quality.disconnected(code);
-          this.callbacks.sendJson({ type: "error", message: `Speech recognition disconnected (code ${code})` });
-        }
+        if (!started) { clearTimeout(timer); reject(new Error(`speech recognition closed (code ${code})`)); return; }
+        if (ws === this.stt) this.onSttLost(code);
       }));
     });
   }
@@ -196,16 +203,61 @@ export class PipelineCallSession implements VoiceSession {
     if (type === "error") { logger.error("speech recognition error event", { event: "stt.error_event", detail: JSON.stringify(msg).slice(0, 400) }); return; }
     if (type === "input_audio_buffer.speech_started") {
       this.quality.callerSpeechStarted();
+      this.speechStartedAt = Date.now();
       // Only speech that is playing or being produced is cut; a turn that is still thinking is replaced when the new words are recognised.
       if (this.clock.audible() || this.speech?.busy) this.bargeIn();
     } else if (type === "input_audio_buffer.speech_stopped") {
       this.quality.callerSpeechStopped();
+      this.lastSpeechMs = this.speechStartedAt ? Date.now() - this.speechStartedAt : 0;
     } else if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(msg["transcript"] ?? "");
       this.quality.callerTranscribed(text);
       this.logger.handleOpenAIEvent(msg);
-      if (text.trim() && !this.ended) this.startTurn(text.trim());
+      if (this.ended) return;
+      if (text.trim()) { this.unclearInRow = 0; this.startTurn(text.trim()); }
+      else this.onUnclearSpeech();
+    } else if (type === "conversation.item.input_audio_transcription.failed") {
+      logger.warn("transcription of an utterance failed", { event: "stt.transcription_failed", detail: JSON.stringify(msg).slice(0, 300) });
+      if (!this.ended) this.onUnclearSpeech();
     }
+  }
+
+  // The caller talked for a while but nothing could be made of it: ask once more instead of staying silent.
+  private onUnclearSpeech(): void {
+    if (this.givingUp || this.turnActive || !this.speech || this.speech.busy || this.clock.audible()) return;
+    if (this.lastSpeechMs < UNCLEAR_MIN_SPEECH_MS || this.unclearInRow >= MAX_UNCLEAR_IN_ROW) return;
+    this.unclearInRow++;
+    const sentence = this.promptSnapshot.text(effectiveLanguage(this.settings) === "en" ? P.unclearEn : P.unclearCs);
+    logger.info("caller speech not understood, asking again", { event: "pipeline.unclear", speech_ms: this.lastSpeechMs, in_row: this.unclearInRow });
+    this.speech.say(sentence);
+    this.history.push({ role: "assistant", content: sentence });
+    this.logger.handleOpenAIEvent({ type: "response.output_text.done", text: sentence });
+  }
+
+  // Speech recognition dropped during the call: reconnect once; if that fails too, apologise and end the call properly.
+  private onSttLost(code: number): void {
+    if (this.ended || this.givingUp) return;
+    logger.warn("speech recognition disconnected", { event: "stt.closed", code, recoveries: this.sttRecoveries });
+    this.quality.disconnected(code);
+    this.listening = false; // caller audio is held in the buffer until the new connection is ready
+    if (this.sttRecoveries >= 1) { void this.giveUp(); return; }
+    this.sttRecoveries++;
+    this.connectStt(this.apiKey, this.settings).catch((e) => {
+      logger.error("speech recognition reconnect failed", { event: "stt.reconnect_failed", err: e });
+      void this.giveUp();
+    });
+  }
+
+  private async giveUp(): Promise<void> {
+    if (this.givingUp || this.ended) return;
+    this.givingUp = true;
+    this.abortTurn();
+    try { this.stt?.close(); } catch { /* already closed */ }
+    this.callbacks.sendJson({ type: "error", message: "Speech recognition disconnected" });
+    const sentence = this.promptSnapshot.text(effectiveLanguage(this.settings) === "en" ? P.connectionLostEn : P.connectionLostCs);
+    this.logger.handleOpenAIEvent({ type: "response.output_text.done", text: sentence });
+    this.speech?.say(sentence);
+    await this.hangUp(this.turnId);
   }
 
   handleClientAudio(audioBase64: string): void {
