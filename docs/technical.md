@@ -244,11 +244,12 @@ and costs a few cents per run.
 
 **Purpose:** `executeTool()` — dispatches a named tool call (as requested
 by the OpenAI Realtime model) to the corresponding handler. HTTP-backed
-tools (`get_available_slots`, `get_services`, `get_resources`,
+tools (`get_services`, `get_resources`,
 `get_day_availability`, `web_search`, `create_calendar_event` (including
 decoding a `slot_id` fallback), `create_enquiry`) call the `flowvoice`
-dashboard API. `search_knowledge` is handled locally via `knowledge.ts`
-(Qdrant + OpenAI embeddings — no HTTP hop to the dashboard). `end_call`
+dashboard API through `callApi` (`tool-http.ts`: time limit, answer check, one shared error object, LEA-159; `get_available_slots` was removed).
+`search_knowledge` is handled locally via `knowledge.ts`
+(Qdrant + OpenAI embeddings — no HTTP hop to the dashboard) with the same time limit and one retry. `end_call`
 is handled entirely inside `session.ts`, not here.
 
 **Bookings (LEA-131, LEA-132):** `create_calendar_event` no longer sends a
@@ -267,11 +268,26 @@ otherwise a short fixed SMS. Any stored booking (waiting or confirmed, `bookingM
 from `searchKnowledge()`.
 
 **Depends on:** `logger.ts`, `knowledge.ts`; HTTP calls into the `flowvoice`
-dashboard's `/api/calendar/slots`, `/api/services`, `/api/resources`,
+dashboard's `/api/services`, `/api/resources`,
 `/api/calendar/windows`, `/api/web-search`, `/api/calendar/events`,
 `/api/enquiries` routes (see that repo's `docs/technical.md`).
 
 **Depended on by:** `session.ts` (`executeToolCall`).
+
+## tool-http.ts (LEA-159)
+
+**What it does:** `callApi(url, init, {timeoutMs, retries, write})` is the only way a tool calls the dashboard. It adds a time limit, checks the status and the JSON, retries a read once, never retries a write, and turns every failure into `{ error, error_code, retryable }` (`timeout`, `unavailable`, `bad_response`, `rejected`, `unknown_outcome`). `callWithTimeout` does the same for the knowledge search.
+**Details:** `features/tool-calls.md`. **Depended on by:** `tools.ts`.
+
+## now.ts (LEA-157)
+
+**What it does:** `nowInTimezone(tz)` gives the date and time, timezone name and UTC offset the prompt block `call.date_time` shows; a missing or mistyped timezone means `Europe/Prague`.
+**Details:** `features/assistant-prompts.md`. **Depended on by:** `prompt.ts`.
+
+## prewarm.ts (LEA-162)
+
+**What it does:** `prewarmCall` (called by the Twilio webhook when the assistant answers) loads the settings and prompt snapshot and opens the connection to OpenAI for the chosen engine while Twilio sets up the audio stream; `takePrewarmed` (session factory) hands it over once; an unclaimed connection is closed after 10 s. `PREWARM=off` disables it.
+**Details:** `features/fast-call-start.md`. **Depended on by:** `handlers/twilio.ts`, `session-factory.ts`, `session.ts`, `live-session.ts`.
 
 ## prompt.ts
 

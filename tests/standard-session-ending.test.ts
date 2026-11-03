@@ -118,3 +118,18 @@ describe("Standard: silence and lost connection (LEA-160)", () => {
     expect(callbacks.endCall).toHaveBeenCalled();
   });
 });
+
+describe("Standard: a connection opened ahead of the call (LEA-162)", () => {
+  it("is used instead of a new one and the session settings are sent at once", async () => {
+    const ahead = { readyState: 1, sent: [] as Array<Record<string, unknown>>, handlers: {} as Handlers,
+      on(event: string, fn: (arg?: unknown) => void) { this.handlers[event] = fn; return this; },
+      send(data: string) { this.sent.push(JSON.parse(data)); }, close() { this.readyState = 3; } };
+    const callbacks = { sendAudio: vi.fn(), sendJson: vi.fn(), sendMark: vi.fn(), endCall: vi.fn(), clearAudio: vi.fn() };
+    const session = new CallSession("proj-1", null, "CA1", callbacks, settings, undefined, { audio: "pcmu", socket: ahead as never });
+    h.sockets.length = 0;
+    await session.start();
+    expect(h.sockets).toHaveLength(0); // no new connection
+    expect(ahead.sent.some((m) => m["type"] === "session.update")).toBe(true);
+    expect(ahead.handlers["message"]).toBeDefined();
+  });
+});

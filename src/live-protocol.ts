@@ -1,6 +1,6 @@
 import type { AssistantSettings } from "./config";
 import type { TranscriptEntry } from "./call-logger";
-import { buildPromptFromSettings, buildTools, type OpenAITool } from "./prompt";
+import { buildDateTimeBlock, buildPromptFromSettings, buildTools, type OpenAITool } from "./prompt";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P } from "./prompts/registry";
 import { personaBlock, resolveVoice } from "./persona";
@@ -57,11 +57,12 @@ export function buildLiveVoicePrompt(
   const sections = [personaBlock(settings, snapshot), snapshot.text(P.liveVoiceBase)];
   const context = buildVoiceBusinessContext(settings, snapshot);
   if (context) sections.push(context);
+  sections.push(buildDateTimeBlock(settings, snapshot)); // the voice says "today" and "this afternoon", so it must know the time (LEA-157)
   const instructions = settings?.system_prompt?.trim();
   if (instructions) {
     sections.push(snapshot.text(P.liveVoiceBusinessInstructions, { instructions }));
   }
-  sections.push(buildVoiceBackendRules(tools, snapshot), snapshot.text(P.liveVoiceEndingRules));
+  sections.push(buildVoiceBackendRules(tools, snapshot), snapshot.text(P.liveVoiceEndingRules), snapshot.text(P.callProtectedCore));
   return sections.join("\n\n");
 }
 

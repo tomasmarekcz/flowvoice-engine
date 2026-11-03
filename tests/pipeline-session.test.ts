@@ -113,14 +113,14 @@ describe("PipelineCallSession", () => {
   it("runs a tool and feeds the result back to the model", async () => {
     const { session, sockets, requests, voice } = setup({
       script: [
-        [{ type: "tool_call", callId: "c1", name: "get_available_slots", arguments: "{\"date\":\"2026-11-04\"}" }],
+        [{ type: "tool_call", callId: "c1", name: "get_day_availability", arguments: "{\"date\":\"2026-11-04\"}" }],
         [{ type: "text", delta: "Máme volno ve tři." }],
       ],
     });
     await session.start();
     sockets[0].say(transcribed("Kdy máte volno?"));
     await flush(20);
-    expect(h.executeTool).toHaveBeenCalledWith("get_available_slots", { date: "2026-11-04" }, "project-1", expect.anything(), "call-1", expect.anything(), "+420123456789");
+    expect(h.executeTool).toHaveBeenCalledWith("get_day_availability", { date: "2026-11-04" }, "project-1", expect.anything(), "call-1", expect.anything(), "+420123456789");
     expect(requests).toHaveLength(2);
     const second = requests[1].input as Array<Record<string, unknown>>;
     expect(second.map((i) => i["type"] ?? i["role"])).toEqual(["user", "function_call", "function_call_output"]);

@@ -4,6 +4,7 @@ import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P, ENGINE_TOOLS as T } from "./prompts/registry";
 import { personaBlock } from "./persona";
 import { endCallEnabled } from "./call-ending";
+import { nowInTimezone } from "./now";
 
 export interface OpenAITool {
   type: "function";
@@ -16,12 +17,10 @@ export interface OpenAITool {
   };
 }
 
-function getTodayLabel(): string {
-  const now = new Date();
-  const tz = "Europe/Prague";
-  const f = (opts: Intl.DateTimeFormatOptions) =>
-    new Intl.DateTimeFormat("en-US", { timeZone: tz, ...opts }).format(now);
-  return `${f({ weekday: "long" })} ${f({ day: "numeric" })}.${f({ month: "numeric" })}.${f({ year: "numeric" })}`;
+/** The "date and time" block: the exact time in the project's timezone (the calendar's), Prague when there is none. */
+export function buildDateTimeBlock(settings: AssistantSettings | null, snapshot: PromptSnapshot): string {
+  const { now, timezone, offset } = nowInTimezone(settings?._calendar_timezone);
+  return snapshot.text(P.callDateTime, { now, timezone, offset });
 }
 
 // ─── Section 2: Business context — loaded from DB, shown to AI as facts ────────
@@ -45,7 +44,7 @@ function buildBusinessContext(settings: AssistantSettings | null, callerPhone: s
   }
 
   lines.push("");
-  lines.push(`Today is ${getTodayLabel()}.`);
+  lines.push(buildDateTimeBlock(settings, snapshot));
 
   if (callerPhone) {
     lines.push("");
@@ -92,6 +91,7 @@ export function buildPromptFromSettings(
     snapshot.text(P.callBase),
     buildBusinessContext(settings, callerPhone, snapshot),
     snapshot.text(P.callToolsPreamble),
+    snapshot.text(P.callToolFailureRule),
   ];
   // LEA-130: a business that does not book appointments through the assistant (calendar off) gets enquiries instead.
   const calendarOn = (settings?.capabilities ?? { calendar: true })["calendar"];
@@ -104,6 +104,8 @@ export function buildPromptFromSettings(
     const greeting = buildGreetingRule(settings, snapshot);
     if (greeting) sections.push(greeting);
   }
+  // Last on purpose: nothing the customer wrote above can override these (LEA-157).
+  sections.push(snapshot.text(P.callProtectedCore));
   return sections.join("\n\n");
 }
 

@@ -49,6 +49,8 @@ export interface LiveSessionDeps {
   connect?: (url: string, apiKey: string) => WebSocket;
   executeTool?: typeof defaultExecuteTool;
   promptSnapshot?: PromptSnapshot;
+  /** A connection to OpenAI Live opened ahead of the call (LEA-162): used for the first start instead of a new one. */
+  prewarmedSocket?: WebSocket | null;
 }
 
 function defaultConnect(url: string, apiKey: string): WebSocket {
@@ -64,6 +66,7 @@ export class LiveCallSession implements VoiceSession {
   private readonly transcript = new TranscriptAccumulator();
   private readonly connect: (url: string, apiKey: string) => WebSocket;
   private readonly runTool: typeof defaultExecuteTool;
+  private prewarmedSocket: WebSocket | null;
   private readonly calendarProjectId: string;
   // Appointments written as already confirmed during this call: the caller gets a confirmation after it (LEA-132).
   private confirmedBookings: ConfirmedBooking[] = [];
@@ -109,6 +112,7 @@ export class LiveCallSession implements VoiceSession {
     this.logger.transcript = this.transcript.entries;
     this.connect = deps.connect ?? defaultConnect;
     this.runTool = deps.executeTool ?? defaultExecuteTool;
+    this.prewarmedSocket = deps.prewarmedSocket ?? null;
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
     // One snapshot of the editable prompts for the whole call (LEA-63), loaded by the session factory.
     this.promptSnapshot = deps.promptSnapshot ?? emptySnapshot();
@@ -127,7 +131,7 @@ export class LiveCallSession implements VoiceSession {
 
     const connectStartedAt = Date.now();
     logger.info("connecting to OpenAI Live", { project_id: this.projectId ?? "none" });
-    const ws = this.connect(LIVE_ENDPOINT, apiKey);
+    const ws = this.prewarmedSocket ?? this.connect(LIVE_ENDPOINT, apiKey);
     this.ws = ws;
 
     const ready = new Promise<void>((resolve, reject) => {
@@ -138,7 +142,7 @@ export class LiveCallSession implements VoiceSession {
       () => this.failStart?.(new Error("OpenAI Live session start timed out")),
       START_TIMEOUT_MS
     );
-    this.attachSocket(ws, message);
+    this.attachSocket(ws, message, !!this.prewarmedSocket);
 
     try {
       await ready;
@@ -164,9 +168,12 @@ export class LiveCallSession implements VoiceSession {
 
   // ─── The connection to OpenAI Live ──────────────────────────────────────────────
 
-  private attachSocket(ws: WebSocket, message: Record<string, unknown>): void {
+  private attachSocket(ws: WebSocket, message: Record<string, unknown>, prewarmed = false): void {
     // WebSocket callbacks do not inherit async context: bind each to the call's log context.
-    ws.on("open", bindToCurrentContext(() => ws.send(JSON.stringify(message))));
+    const onOpen = bindToCurrentContext(() => ws.send(JSON.stringify(message)));
+    // A connection opened ahead of the call may already be open: its "open" event has passed.
+    if (prewarmed && ws.readyState === WebSocket.OPEN) onOpen();
+    else ws.on("open", onOpen);
     ws.on("message", bindToCurrentContext((data) => {
       if (ws !== this.ws) return; // an old connection
       this.handleMessage(data.toString()).catch((e) => logger.error("handleMessage error", { err: e }));

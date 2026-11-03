@@ -13,6 +13,7 @@ import { checkCallEligibility } from "../billing";
 import { decideCallRouting } from "../call-routing";
 import { isRecipientAllowed } from "../environment";
 import { beginDial, endDial } from "../activity";
+import { prewarmCall } from "../prewarm";
 import { guardTwilioRequest, createStreamAuth, validationEnabled, verifyStreamAuth } from "../twilio-security";
 
 const DIAL_TO_OWNER_TIMEOUT_SECONDS = 20;
@@ -131,6 +132,8 @@ export async function handleTwilioVoiceWebhook(req: Request, res: Response): Pro
     return;
   }
 
+  // The assistant answers: get settings, prompts and the connection to OpenAI ready while Twilio sets up the stream (LEA-162).
+  prewarmCall({ callSid, projectId, settings });
   const twiml = buildAiConnectTwiml({
     engineHost, wsProtocol, httpProtocol, projectId, callerPhone, callSid, includeRecording: true,
   });
@@ -162,6 +165,7 @@ export async function handleDialStatusCallback(req: Request, res: Response): Pro
 
   // Recording was already started in the initial webhook response, before
   // the <Dial> — don't start a second one here.
+  prewarmCall({ callSid, projectId }); // the owner did not answer: the assistant takes over (LEA-162)
   const twiml = buildAiConnectTwiml({
     engineHost, wsProtocol, httpProtocol, projectId, callerPhone, callSid, includeRecording: false,
   });

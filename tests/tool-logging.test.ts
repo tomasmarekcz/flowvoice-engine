@@ -20,11 +20,12 @@ describe("executeTool logging", () => {
     expect(JSON.stringify(call![1])).not.toContain("Jana");
   });
 
-  it("logs a tool whose HTTP call throws as an error event", async () => {
+  it("logs a tool whose HTTP call cannot connect as a failed tool with its error code", async () => {
     globalThis.fetch = vi.fn(async () => { throw new Error("connection refused"); }) as unknown as typeof fetch;
-    await executeTool("get_services", {}, "p1", "p1");
-    const call = log.error.mock.calls.find(([, ctx]) => ctx?.event === "tool.exec");
-    expect(call![1]).toMatchObject({ tool: "get_services" });
+    const { result } = await executeTool("get_services", {}, "p1", "p1");
+    expect(result).toMatchObject({ error_code: "unavailable" });
+    const call = log.info.mock.calls.find(([, ctx]) => ctx?.event === "tool.exec");
+    expect(call![1]).toMatchObject({ tool: "get_services", result_error: true, error_code: "unavailable" });
   });
 
   it("flags tool results that contain an error", async () => {

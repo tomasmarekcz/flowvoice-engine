@@ -5,9 +5,9 @@ import { executeTool } from "../../src/tools";
 const hasFrontend = !!process.env.RUN_INTEGRATION_TOOLS;
 
 describe.skipIf(!hasFrontend)("executeTool (real frontend API)", () => {
-  it("get_available_slots returns object without throwing", async () => {
+  it("get_day_availability returns object without throwing", async () => {
     const { result } = await executeTool(
-      "get_available_slots",
+      "get_day_availability",
       { from_date: new Date().toISOString().slice(0, 10) },
       "test-proj",
       "admin-test"
@@ -17,7 +17,7 @@ describe.skipIf(!hasFrontend)("executeTool (real frontend API)", () => {
     if ("error" in r) {
       expect(typeof r.error).toBe("string");
     } else {
-      expect(Array.isArray(r.slots ?? [])).toBe(true);
+      expect(Array.isArray(r.days ?? [])).toBe(true);
     }
   });
 

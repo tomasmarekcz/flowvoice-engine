@@ -66,6 +66,8 @@ export interface CallSessionOptions {
    * Absent = the Realtime model speaks itself (Standard).
    */
   voice?: (voiceName: string, snapshot: PromptSnapshot) => VoiceProvider;
+  /** A connection to OpenAI that was opened ahead of the call (LEA-162): used instead of opening a new one. */
+  socket?: WebSocket | null;
 }
 
 export class CallSession implements VoiceSession {
@@ -193,14 +195,15 @@ export class CallSession implements VoiceSession {
     const audioFormat = this.options.audio === "pcmu" ? { type: "audio/pcmu" } : { type: "audio/pcm", rate: 24000 };
     const instructions = resumed ? `${this.instructions}\n\n${this.resumeNote()}` : this.instructions;
 
-    const openaiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=${model}`, {
+    const prewarmed = !resumed ? this.options.socket ?? null : null;
+    const openaiWs = prewarmed ?? new WebSocket(`wss://api.openai.com/v1/realtime?model=${model}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     this.openaiWs = openaiWs;
     this.resumed = resumed;
 
     // WebSocket callbacks do not inherit async context: bind each to the call's log context.
-    openaiWs.on("open", bindToCurrentContext(() => {
+    const onOpen = bindToCurrentContext(() => {
       logger.info(resumed ? "OpenAI reconnected, sending session.update" : "OpenAI connected, sending session.update", { event: "openai.connected" });
       openaiWs.send(JSON.stringify({
         type: "session.update",
@@ -237,7 +240,10 @@ export class CallSession implements VoiceSession {
         // The engine tells the client when to stop playing (engine.clear_audio); it need not guess from speech_started.
         barge_in: "engine",
       }));
-    }));
+    });
+    // A connection opened ahead of the call may already be open: its "open" event has passed.
+    if (prewarmed && prewarmed.readyState === WebSocket.OPEN) onOpen();
+    else openaiWs.on("open", onOpen);
 
     openaiWs.on("message", bindToCurrentContext((data) => {
       if (openaiWs !== this.openaiWs) return; // an old connection

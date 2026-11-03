@@ -126,3 +126,20 @@ describe("Live: lost connection (LEA-160)", () => {
     expect(callbacks.endCall).toHaveBeenCalled();
   });
 });
+
+describe("Live: a connection opened ahead of the call (LEA-162)", () => {
+  it("is used instead of a new one and session.start is sent at once", async () => {
+    const ahead = new FakeSocket(); // already open: its "open" event has passed
+    const made: FakeSocket[] = [];
+    const callbacks = { sendAudio: vi.fn(), sendJson: vi.fn(), sendMark: vi.fn(), endCall: vi.fn() };
+    const session = new LiveCallSession(settings(), "proj-1", null, "CA1", callbacks, {
+      connect: () => { const s = new FakeSocket(); made.push(s); return s as unknown as WebSocket; },
+      prewarmedSocket: ahead as unknown as WebSocket,
+    });
+    const started = session.start();
+    expect(ahead.ofType("session.start")).toHaveLength(1);
+    ahead.serverSays({ type: "session.started" });
+    await started;
+    expect(made).toHaveLength(0);
+  });
+});

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockFetch = vi.fn();
-vi.stubGlobal("fetch", mockFetch);
+// The mocked answers carry only a body; the status a real answer has is added here (200 unless the test says otherwise).
+vi.stubGlobal("fetch", (...args: unknown[]) => Promise.resolve(mockFetch(...args)).then((r) => ({ ok: true, status: 200, ...r })));
 
 beforeEach(() => {
   process.env.FRONTEND_API_URL = "http://localhost:3000";
@@ -11,18 +12,6 @@ beforeEach(() => {
 const { executeTool } = await import("../src/tools");
 
 describe("executeTool", () => {
-  it("calls /api/calendar/slots for get_available_slots", async () => {
-    mockFetch.mockResolvedValueOnce({ json: async () => ({ slots: ["2026-06-23T09:00:00Z"] }) });
-
-    const { result } = await executeTool("get_available_slots", { from_date: "2026-06-23" }, "proj-1", "admin-test");
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url] = mockFetch.mock.calls[0] as [string, unknown];
-    expect(url).toContain("/api/calendar/slots");
-    expect(url).toContain("from=");
-    expect(result).toEqual({ slots: ["2026-06-23T09:00:00Z"] });
-  });
-
   it("calls /api/enquiries for create_enquiry", async () => {
     mockFetch.mockResolvedValueOnce({ json: async () => ({ id: "enq-1" }) });
 
@@ -45,9 +34,15 @@ describe("executeTool", () => {
   });
 
   it("returns embeddingTokens 0 for non-knowledge tools", async () => {
-    mockFetch.mockResolvedValueOnce({ json: async () => ({ slots: [] }) });
-    const { embeddingTokens } = await executeTool("get_available_slots", {}, "proj-1", "admin-test");
+    mockFetch.mockResolvedValueOnce({ json: async () => ({ services: [] }) });
+    const { embeddingTokens } = await executeTool("get_services", {}, "proj-1", "admin-test");
     expect(embeddingTokens).toBe(0);
+  });
+
+  it("no longer knows get_available_slots (removed in LEA-159)", async () => {
+    const { result } = await executeTool("get_available_slots", {}, "proj-1", "admin-test");
+    expect((result as { error: string }).error).toMatch(/Unknown tool/);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("calls /api/calendar/windows for get_day_availability", async () => {

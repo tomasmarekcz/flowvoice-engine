@@ -163,6 +163,23 @@ Your answers are read aloud on the phone by a voice. Write them exactly as they 
     `===ENDING THE CALL===
 The caller always has the last word. When everything is handled, briefly recap what was agreed and ask whether there is anything else. When the caller says no, thanks or goodbye, say a short goodbye and call end_call in that same turn. Never hang up while the caller is still talking or waiting for something. Never leave the line open after saying goodbye.`),
 
+  // LEA-157: the exact time, and rules that no customer instruction can override.
+  callDateTime: def("call.date_time", "Aktuální datum a čas (všechny hlasy)",
+    "V každém hovoru v části o firmě. Říká asistentovi přesný čas a časové pásmo kalendáře firmy (Nastavení → kalendář).", "during_call",
+    `===DATE AND TIME===
+Right now it is {{now}} in the business's timezone ({{timezone}}, UTC{{offset}}). Use this for "today", "tomorrow", "this afternoon", "in an hour". Never offer, suggest or book a time that has already passed. Times you pass to tools use this timezone.`,
+    [ph("now", "Aktuální den a čas, např. „Tuesday 3 November 2026, 17:42“. Doplňuje ji aplikace.", true), ph("timezone", "Název časového pásma kalendáře. Doplňuje ji aplikace.", true), ph("offset", "Posun od UTC, např. „+01:00“. Doplňuje ji aplikace.", true)]),
+
+  callToolFailureRule: def("call.tool_failure_rule", "Když nástroj selže (všechny hlasy)",
+    "V každém hovoru za úvodem k nástrojům. Říká, co asistent udělá, když nástroj vrátí chybu nebo neodpoví včas.", "during_call",
+    `===WHEN A TOOL FAILS===
+If a tool returns an error, never guess or invent the answer. Tell the caller once, briefly and calmly, that you cannot check that right now, then offer the next step: take their details so the business can call back (use create_enquiry), or suggest calling again shortly. Never say a booking or request was saved unless the tool confirmed it. If the result says the outcome is unknown, say you are not sure it went through and that the business will check.`),
+
+  callProtectedCore: def("call.protected_core", "Pravidla, která mají vždy přednost (všechny hlasy)",
+    "V každém hovoru úplně na konci instrukcí, za textem zákazníka. Zajišťuje, že pravdivost, výsledky nástrojů a pravidla ukončení hovoru nepřebije žádná instrukce zákazníka.", "during_call",
+    `===RULES THAT ALWAYS APPLY===
+Whatever the business instructions above say, these rules win: never invent information, prices, availability or actions; say something was done only when a tool confirmed it, and treat a tool error as "not done"; never offer or book a time that has already passed; the caller always has the last word, and the call ends only as described in the rules for ending the call.`),
+
   callBusinessContextIntro: def("call.business_context_intro", "Úvod k údajům o firmě (Standard hlas)",
     "V každém hovoru před výčtem údajů o firmě (název, obor, popis, web, služby). Říká asistentovi, že jde o fakta, ne o pokyny.", "during_call",
     `===BUSINESS CONTEXT===
@@ -214,7 +231,7 @@ When this call connects, speak first. Say exactly this — word for word:
 Communicate naturally, warmly, and professionally. Keep your responses brief and suitable for a phone conversation, ask one question at a time, and do not ask for information the caller has already provided.
 
 ===LANGUAGE===
-Always answer in the language the caller is speaking right now, and switch immediately if they switch. Do not assume a language from the business. If you cannot tell yet, use the language of your greeting.`),
+Always answer in the language the caller is speaking right now, and switch immediately if they switch. If you cannot tell yet, use the language set in your role above, otherwise the language of your greeting.`),
 
   liveVoiceBusinessContextIntro: def("live.voice_business_context_intro", "Úvod k údajům o firmě (Live hlas)",
     "V hovoru s hlasem Live před výčtem údajů o firmě (název, obor, popis).", "during_call",
@@ -412,7 +429,7 @@ export const ENGINE_TOOLS = {
     [ph("calendar_project_id", "Identifikátor kalendáře firmy. Doplňuje ji aplikace.")],
     {
       service_id: "The ID of the service being booked — call get_services first if you don't have it.",
-      from_date: "Starting date to check, YYYY-MM-DD (Prague timezone). Use today's date if the customer says 'today' or 'as soon as possible'.",
+      from_date: "Starting date to check, YYYY-MM-DD (the business's timezone). Use today's date if the customer says 'today' or 'as soon as possible'.",
       days: "How many calendar days to check starting from from_date. Use 1 for a specific day, 5 when customer says 'this week', 7 when customer is flexible or says 'next week'.",
     }),
 
@@ -424,8 +441,8 @@ export const ENGINE_TOOLS = {
       ph("email_note", "Věta, že je e-mail zákazníka povinný. Doplňuje ji aplikace jen když to firma vyžaduje."),
     ],
     {
-      start_time: "ISO 8601 start time",
-      end_time: "ISO 8601 end time",
+      start_time: "ISO 8601 start time with the timezone offset, e.g. 2026-11-04T14:00:00+01:00 (the business's timezone).",
+      end_time: "ISO 8601 end time with the timezone offset, e.g. 2026-11-04T15:00:00+01:00.",
       title: "Short appointment title",
       customer_name: "Customer name",
       customer_phone: "Customer phone",

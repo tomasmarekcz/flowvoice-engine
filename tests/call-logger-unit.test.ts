@@ -64,7 +64,7 @@ describe("CallLogger transcript tracking", () => {
   it("tracks pending tool call and resolves it when output arrives", () => {
     log.handleOpenAIEvent({
       type: "response.function_call_arguments.done",
-      name: "get_available_slots",
+      name: "get_day_availability",
       call_id: "call-abc",
       arguments: JSON.stringify({ from_date: "2026-07-01" }),
     });

@@ -55,7 +55,8 @@ describe("overrides change exactly the targeted text", () => {
   it("live voice rules and greeting", () => {
     const tools = buildTools(s);
     const voice = buildLiveVoicePrompt(s, tools, snap([[ENGINE_PROMPTS.liveVoiceEndingRules.key, "BYE RULES"]]));
-    expect(voice.endsWith("BYE RULES")).toBe(true);
+    expect(voice).toContain("BYE RULES");
+    expect(voice.endsWith(ENGINE_PROMPTS.callProtectedCore.default)).toBe(true); // the rules that always apply come last (LEA-157)
     expect(buildLiveGreetingInstruction(s, snap([[ENGINE_PROMPTS.liveGreetingInstruction.key, "Say: {{greeting}}"]]))).toBe(
       "Say: Ordinace na Marjánce, dobrý den. Jak vám mohu pomoci?"
     );

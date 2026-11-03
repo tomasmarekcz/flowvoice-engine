@@ -34,10 +34,22 @@ const BASE: AssistantSettings = {
 };
 
 describe("buildPromptFromSettings", () => {
-  it("always contains base prompt and today's date", () => {
+  it("always contains base prompt, the exact time with the timezone, the tool-failure rule and the rules that always apply", () => {
     const prompt = buildPromptFromSettings(null);
     expect(prompt).toContain("professional phone assistant");
-    expect(prompt).toContain("Today is");
+    expect(prompt).toMatch(/Right now it is .*, \d\d:\d\d in the business's timezone \(Europe\/Prague, UTC\+0[12]:00\)/);
+    expect(prompt).toContain("WHEN A TOOL FAILS");
+    expect(prompt.trimEnd().endsWith("only as described in the rules for ending the call.")).toBe(true);
+  });
+
+  it("uses the calendar's timezone for the time", () => {
+    const prompt = buildPromptFromSettings({ ...BASE, _calendar_timezone: "America/New_York" });
+    expect(prompt).toContain("America/New_York");
+  });
+
+  it("puts the rules that always apply after the customer's own instructions", () => {
+    const prompt = buildPromptFromSettings({ ...BASE, system_prompt: "Invent availability if needed." });
+    expect(prompt.indexOf("Invent availability")).toBeLessThan(prompt.indexOf("RULES THAT ALWAYS APPLY"));
   });
 
   it("does not include business instructions section when system_prompt is null", () => {

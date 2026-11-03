@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { searchKnowledge } from "./knowledge";
+import { callApi, callWithTimeout, toolError, TOOL_READ_RETRIES, TOOL_TIMEOUT_MS, type ApiResult } from "./tool-http";
 
 // Identifies this engine to the frontend's tenant-scoped API routes (which
 // otherwise require a logged-in Supabase Auth session) — the engine has no
@@ -16,6 +17,14 @@ function loggableArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of ARG_WHITELIST) if (args[key] !== undefined) out[key] = args[key];
   return out;
+}
+
+const READ = { timeoutMs: TOOL_TIMEOUT_MS.read, retries: TOOL_READ_RETRIES } as const;
+const WRITE = { timeoutMs: TOOL_TIMEOUT_MS.write, write: true } as const;
+
+// A failed call becomes the shared error object (see tool-http.ts); a good one is passed on as it is.
+function unwrap(r: ApiResult): unknown {
+  return r.ok ? r.data : r.error;
 }
 
 function resultHasError(result: unknown): boolean {
@@ -38,46 +47,28 @@ export async function executeTool(
     let result: unknown;
     let embeddingTokens = 0;
 
-    if (name === "get_available_slots") {
-      const fromIso = args["from_date"]
-        ? new Date(`${args["from_date"]}T00:00:00`).toISOString()
-        : new Date().toISOString();
-      const params = new URLSearchParams({
-        project_id: calendarProjectId,
-        from: fromIso,
-        ...(args["from_time"] ? { from_time: String(args["from_time"]) } : {}),
-        ...(args["duration_minutes"] ? { duration: String(args["duration_minutes"]) } : {}),
-      });
-      const r = await fetch(`${base}/api/calendar/slots?${params}`);
-      result = await r.json();
-    } else if (name === "get_services") {
+    if (name === "get_services") {
       const params = new URLSearchParams({ project_id: projectId });
-      const r = await fetch(`${base}/api/services?${params}`, { headers: internalHeaders() });
-      result = await r.json();
+      result = unwrap(await callApi(`${base}/api/services?${params}`, { headers: internalHeaders() }, READ));
     } else if (name === "get_resources") {
       const params = new URLSearchParams({ project_id: projectId });
       if (args["service_id"]) params.set("service_id", String(args["service_id"]));
-      const r = await fetch(`${base}/api/resources?${params}`, { headers: internalHeaders() });
-      result = await r.json();
+      result = unwrap(await callApi(`${base}/api/resources?${params}`, { headers: internalHeaders() }, READ));
     } else if (name === "get_day_availability") {
-      const fromDate = args["from_date"]
-        ? String(args["from_date"])
-        : new Date().toISOString().slice(0, 10);
+      // No date given: the dashboard picks today in the calendar's own timezone (LEA-157), not the UTC date.
       const params = new URLSearchParams({
         project_id: calendarProjectId,
-        from: fromDate,
         days: String(args["days"] ?? 7),
       });
+      if (args["from_date"]) params.set("from", String(args["from_date"]));
       if (args["service_id"]) params.set("service_id", String(args["service_id"]));
-      const r = await fetch(`${base}/api/calendar/windows?${params}`, { headers: internalHeaders() });
-      result = await r.json();
+      result = unwrap(await callApi(`${base}/api/calendar/windows?${params}`, { headers: internalHeaders() }, READ));
     } else if (name === "web_search") {
       const params = new URLSearchParams({
         project_id: calendarProjectId,
         q: String(args["query"] ?? ""),
       });
-      const r = await fetch(`${base}/api/web-search?${params}`);
-      result = await r.json();
+      result = unwrap(await callApi(`${base}/api/web-search?${params}`, undefined, { timeoutMs: TOOL_TIMEOUT_MS.webSearch }));
     } else if (name === "create_calendar_event") {
       let startTime = args["start_time"];
       let endTime = args["end_time"];
@@ -94,7 +85,7 @@ export async function executeTool(
         } catch { /* ignore malformed slot_id */ }
       }
 
-      const r = await fetch(`${base}/api/calendar/events?project_id=${calendarProjectId}`, {
+      result = unwrap(await callApi(`${base}/api/calendar/events?project_id=${calendarProjectId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...internalHeaders() },
         body: JSON.stringify({
@@ -111,10 +102,9 @@ export async function executeTool(
           created_by: "ai",
           event_kind: "work",
         }),
-      });
-      result = await r.json();
+      }, WRITE));
     } else if (name === "create_enquiry") {
-      const r = await fetch(`${base}/api/enquiries`, {
+      result = unwrap(await callApi(`${base}/api/enquiries`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...internalHeaders() },
         body: JSON.stringify({
@@ -127,16 +117,19 @@ export async function executeTool(
           customer_email: args["customer_email"] ?? null,
           status: "new",
         }),
-      });
-      result = await r.json();
+      }, WRITE));
     } else if (name === "search_knowledge") {
       const query = String(args["query"] ?? "");
       const topN = knowledgeTopN ?? 5;
-      const { chunks, embeddingTokens: et } = await searchKnowledge(query, projectId, topN);
-      result = { chunks };
-      embeddingTokens = et;
+      const found = await callWithTimeout(() => searchKnowledge(query, projectId, topN), TOOL_TIMEOUT_MS.knowledge, TOOL_READ_RETRIES);
+      if (found.ok) {
+        result = { chunks: found.data.chunks };
+        embeddingTokens = found.data.embeddingTokens;
+      } else {
+        result = found.error;
+      }
     } else {
-      return { result: { error: `Unknown tool: ${name}` }, embeddingTokens: 0 };
+      return { result: toolError("rejected", `Unknown tool: ${name}`, false), embeddingTokens: 0 };
     }
 
     logger.info("tool executed", {
@@ -144,11 +137,12 @@ export async function executeTool(
       tool: name,
       duration_ms: Date.now() - t0,
       result_error: resultHasError(result),
+      error_code: resultHasError(result) ? (result as { error_code?: string }).error_code : undefined,
       args: loggableArgs(args),
     });
     return { result, embeddingTokens };
   } catch (e) {
     logger.error("tool execution error", { event: "tool.exec", tool: name, duration_ms: Date.now() - t0, args: loggableArgs(args), err: e });
-    return { result: { error: String(e) }, embeddingTokens: 0 };
+    return { result: toolError("unavailable", String(e), false), embeddingTokens: 0 };
   }
 }
