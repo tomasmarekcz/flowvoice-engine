@@ -46,6 +46,8 @@ export interface AssistantSettings {
   _calendar_timezone?: string;
   // From the same calendar: true when the owner confirms each booking the assistant makes (LEA-132).
   _calendar_requires_confirmation?: boolean;
+  // From the same calendar: how many hours ahead a booking must be made (the dashboard offers no earlier slot).
+  _calendar_min_notice_hours?: number;
 }
 
 function isUuid(str: string | null | undefined): boolean {
@@ -108,14 +110,15 @@ export async function loadAssistantSettings(
 
     if (settings.calendar_id) {
       const [calRows, etRows] = await Promise.all([
-        fetch(`${url}/rest/v1/calendars?id=eq.${settings.calendar_id}&select=project_id,timezone,requires_owner_confirmation&limit=1`, { headers })
-          .then((r) => r.json() as Promise<Array<{ project_id: string; timezone: string | null; requires_owner_confirmation: boolean | null }>>),
+        fetch(`${url}/rest/v1/calendars?id=eq.${settings.calendar_id}&select=project_id,timezone,requires_owner_confirmation,min_notice_hours&limit=1`, { headers })
+          .then((r) => r.json() as Promise<Array<{ project_id: string; timezone: string | null; requires_owner_confirmation: boolean | null; min_notice_hours: number | null }>>),
         fetch(`${url}/rest/v1/services?project_id=eq.${projectId}&is_active=eq.true&select=name&order=name.asc`, { headers })
           .then((r) => r.json() as Promise<Array<{ name: string }>>),
       ]);
       settings._calendar_project_id = calRows?.[0]?.project_id ?? "admin-test";
       settings._calendar_timezone = calRows?.[0]?.timezone ?? "Europe/Prague";
       settings._calendar_requires_confirmation = calRows?.[0]?.requires_owner_confirmation ?? true;
+      settings._calendar_min_notice_hours = calRows?.[0]?.min_notice_hours ?? 0;
       settings._service_names = Array.isArray(etRows) ? etRows.map((e) => e.name) : [];
     } else {
       settings._calendar_project_id = "admin-test";

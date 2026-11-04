@@ -1,5 +1,7 @@
 import { logger } from "./logger";
 import { searchKnowledge } from "./knowledge";
+import { bookingInstruction } from "./booking-confirmation";
+import type { PromptSnapshot } from "./prompts/core";
 import { callApi, callWithTimeout, toolError, TOOL_READ_RETRIES, TOOL_TIMEOUT_MS, type ApiResult } from "./tool-http";
 
 // Identifies this engine to the frontend's tenant-scoped API routes (which
@@ -39,6 +41,7 @@ export async function executeTool(
   dbCallId?: string,
   knowledgeTopN?: number,
   callerPhone?: string | null,
+  snapshot?: PromptSnapshot,
 ): Promise<{ result: unknown; embeddingTokens: number }> {
   const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
   const t0 = Date.now();
@@ -103,6 +106,9 @@ export async function executeTool(
           event_kind: "work",
         }),
       }, WRITE));
+      // The assistant is told what to say about this booking (confirmed or waiting, text message or not), following the settings.
+      const instruction = bookingInstruction(result, Boolean(args["customer_phone"] || callerPhone), snapshot);
+      if (instruction && typeof result === "object" && result !== null) result = { ...result, say_to_caller: instruction };
     } else if (name === "create_enquiry") {
       result = unwrap(await callApi(`${base}/api/enquiries`, {
         method: "POST",

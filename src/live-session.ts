@@ -450,7 +450,8 @@ export class LiveCallSession implements VoiceSession {
       this.calendarProjectId,
       this.logger.callId ?? undefined,
       this.settings?.knowledge_top_n ?? 5,
-      this.callerPhone
+      this.callerPhone,
+      this.promptSnapshot
     );
     this.embeddingTokens += embeddingTokens;
     this.quality.toolFinished(name, Date.now() - t0, toolResultFailed(result));

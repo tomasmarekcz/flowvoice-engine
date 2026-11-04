@@ -34,6 +34,9 @@ const MAX_TOOL_ROUNDS = 6;
 const UNCLEAR_MIN_SPEECH_MS = 700;
 // After this many "I didn't catch that" in a row the assistant stops asking and waits.
 const MAX_UNCLEAR_IN_ROW = 2;
+// Sound counts as the caller speaking (and cuts the assistant off) only after it lasts this long or is transcribed into words:
+// a click, a cough or the assistant's own voice coming back through the line must not stop the assistant mid-sentence.
+const BARGE_IN_CONFIRM_MS = 500;
 
 export interface PipelineOptions {
   /** Audio format of the caller's side: "pcmu" (phone line, default on Twilio) or PCM 24 kHz (browser test call). */
@@ -88,6 +91,7 @@ export class PipelineCallSession implements VoiceSession {
   private givingUp = false;
   private apiKey = "";
   private speechStartedAt = 0;
+  private bargeInTimer: NodeJS.Timeout | null = null;
   private lastSpeechMs = 0;
   private unclearInRow = 0;
   private usage = {
@@ -165,7 +169,6 @@ export class PipelineCallSession implements VoiceSession {
     const ws = this.options.connect ? this.options.connect(url, apiKey) : new WebSocket(url, { headers: { Authorization: `Bearer ${apiKey}` } });
     this.stt = ws;
     const language = effectiveLanguage(settings);
-    const vocabulary = [settings?._project_name, ...(settings?._service_names ?? [])].filter(Boolean).join(", ");
     return new Promise<void>((resolve, reject) => {
       let started = false;
       const timer = setTimeout(() => reject(new Error("speech recognition start timed out")), STT_START_TIMEOUT_MS);
@@ -181,7 +184,6 @@ export class PipelineCallSession implements VoiceSession {
                 transcription: {
                   model: pipelineSttModel(),
                   ...(language === "auto" ? {} : { language }),
-                  ...(vocabulary ? { prompt: vocabulary } : {}),
                 },
                 turn_detection: { type: "server_vad", threshold: 0.8, prefix_padding_ms: 300, silence_duration_ms: 400 },
               },
@@ -218,24 +220,34 @@ export class PipelineCallSession implements VoiceSession {
     if (type === "input_audio_buffer.speech_started") {
       this.quality.callerSpeechStarted();
       this.speechStartedAt = Date.now();
-      this.watchdog?.callerSpoke();
-      this.cancelHangupIfCallerSpeaks();
-      // Only speech that is playing or being produced is cut; a turn that is still thinking is replaced when the new words are recognised.
-      if (this.clock.audible() || this.speech?.busy) this.bargeIn();
+      if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
+      this.bargeInTimer = setTimeout(() => this.onVerifiedCallerSpeech(), BARGE_IN_CONFIRM_MS);
     } else if (type === "input_audio_buffer.speech_stopped") {
       this.quality.callerSpeechStopped();
+      if (this.bargeInTimer) { clearTimeout(this.bargeInTimer); this.bargeInTimer = null; }
       this.lastSpeechMs = this.speechStartedAt ? Date.now() - this.speechStartedAt : 0;
     } else if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(msg["transcript"] ?? "");
       this.quality.callerTranscribed(text);
       this.logger.handleOpenAIEvent(msg);
       if (this.ended) return;
-      if (text.trim()) { this.unclearInRow = 0; this.startTurn(text.trim()); }
+      if (text.trim()) { this.unclearInRow = 0; this.onVerifiedCallerSpeech(); this.startTurn(text.trim()); }
       else this.onUnclearSpeech();
     } else if (type === "conversation.item.input_audio_transcription.failed") {
       logger.warn("transcription of an utterance failed", { event: "stt.transcription_failed", detail: JSON.stringify(msg).slice(0, 300) });
       if (!this.ended) this.onUnclearSpeech();
     }
+  }
+
+  // The caller really speaks (the sound lasted long enough, or it was transcribed into words): the line is not silent,
+  // a goodbye in progress can be taken back, and speech that is playing or being produced is cut. A turn that is still
+  // thinking is replaced when the new words are recognised.
+  private onVerifiedCallerSpeech(): void {
+    if (this.bargeInTimer) { clearTimeout(this.bargeInTimer); this.bargeInTimer = null; }
+    if (this.ended) return;
+    this.watchdog?.callerSpoke();
+    this.cancelHangupIfCallerSpeaks();
+    if (this.clock.audible() || this.speech?.busy) this.bargeIn();
   }
 
   // The caller talked for a while but nothing could be made of it: ask once more instead of staying silent.
@@ -413,7 +425,7 @@ export class PipelineCallSession implements VoiceSession {
     }, TOOL_FILLER_MS);
     let result: unknown;
     try {
-      const out = await executeTool(call.name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, this.settings?.knowledge_top_n ?? 5, this.callerPhone);
+      const out = await executeTool(call.name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, this.settings?.knowledge_top_n ?? 5, this.callerPhone, this.promptSnapshot);
       result = out.result;
       this.embeddingTokens += out.embeddingTokens;
     } finally {
@@ -527,6 +539,7 @@ export class PipelineCallSession implements VoiceSession {
   /** Close everything without writing the call (the engine could not start; the call row is removed). */
   async abort(): Promise<void> {
     this.watchdog?.stop();
+    if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
     this.ended = true;
     this.abortTurn();
     this.speech?.close();
@@ -538,6 +551,7 @@ export class PipelineCallSession implements VoiceSession {
     if (this.ended) return;
     this.ended = true;
     this.watchdog?.stop();
+    if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
     this.abortTurn();
     logger.info("session ending, generating summary", { event: "call.ending" });
     this.speech?.close();

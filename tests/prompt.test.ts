@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildPromptFromSettings, buildTools } from "../src/prompt";
+import { buildPromptFromSettings, buildProtectedCore, buildTools } from "../src/prompt";
+import { emptySnapshot } from "../src/prompts/core";
 import type { AssistantSettings } from "../src/config";
 
 const BASE: AssistantSettings = {
@@ -286,5 +287,23 @@ describe("buildTools", () => {
     const tools = buildTools({ ...BASE, capabilities: { business_knowledge: true }, knowledge_top_n: null });
     const tool = tools.find((t) => t.name === "search_knowledge")!;
     expect(tool.description).toContain("5");
+  });
+});
+
+describe("notice rule and knowledge fallback (LEA-166)", () => {
+  it("adds the booking notice to the rules that always apply, from the calendar's hours", () => {
+    const text = buildProtectedCore({ ...BASE, capabilities: { calendar: true }, _calendar_min_notice_hours: 48 }, emptySnapshot());
+    expect(text).toContain("at least 48 hours' notice");
+    expect(text).toContain("RULES THAT ALWAYS APPLY");
+  });
+  it("adds nothing without a calendar or without a notice", () => {
+    expect(buildProtectedCore({ ...BASE, _calendar_min_notice_hours: 0 }, emptySnapshot())).not.toContain("notice");
+    expect(buildProtectedCore({ ...BASE, capabilities: { calendar: false }, _calendar_min_notice_hours: 48 }, emptySnapshot())).not.toContain("notice");
+  });
+  it("sends the assistant from the documents to the web only when web search is on", () => {
+    const desc = (caps: Record<string, boolean>) =>
+      buildTools({ ...BASE, capabilities: caps }, emptySnapshot()).find((t) => t.name === "search_knowledge")?.description ?? "";
+    expect(desc({ business_knowledge: true, web_search: true })).toContain("use web_search");
+    expect(desc({ business_knowledge: true })).not.toContain("web_search");
   });
 });

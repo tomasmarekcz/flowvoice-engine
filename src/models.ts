@@ -11,8 +11,8 @@ export const hybridBrainModel = (): string => process.env.HYBRID_BRAIN_MODEL || 
 export const voiceModel = (): string => process.env.VOICE_MODEL || "gpt-realtime-2.1-mini";
 
 /** Pipeline engine: the text model that thinks (Responses API) and how much it reasons before answering. */
-export const pipelineLlmModel = (): string => process.env.PIPELINE_LLM_MODEL || "gpt-5.6-luna";
-export const pipelineLlmEffort = (): string => process.env.PIPELINE_LLM_EFFORT ?? "none";
+export const pipelineLlmModel = (): string => process.env.PIPELINE_LLM_MODEL || "gpt-6-luna";
+export const pipelineLlmEffort = (): string => process.env.PIPELINE_LLM_EFFORT ?? "low";
 
 /** Pipeline engine: speech recognition. */
 export const pipelineSttModel = (): string => process.env.PIPELINE_STT_MODEL || "gpt-4o-transcribe";

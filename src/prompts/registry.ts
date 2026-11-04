@@ -186,6 +186,27 @@ If a tool returns an error, never guess or invent the answer. Tell the caller on
     `===RULES THAT ALWAYS APPLY===
 Whatever the business instructions above say, these rules win: never invent information, prices, availability or actions; say something was done only when a tool confirmed it, and treat a tool error as "not done"; never offer or book a time that has already passed; the caller always has the last word, and the call ends only as described in the rules for ending the call.`),
 
+  knowledgeWebFallback: def("tool.search_knowledge.web_fallback", "Znalosti: když nic nenajdeš, hledej na webu",
+    "Připojuje se k popisu nástroje pro znalosti, jen když má firma zapnuté vyhledávání na internetu. Asistent pak hledá na webu, když v dokumentech nic nenajde.", "during_call",
+    " If the documents do not contain what the customer asks, do not give up: use web_search before telling the customer that you do not know."),
+
+  callMinNotice: def("call.min_notice", "Minimální doba předem pro rezervaci (všechny hlasy)",
+    "V každém hovoru za pravidly, která mají vždy přednost, když má firma zapnutý kalendář a v kalendáři nastavenou minimální dobu předem. Hodiny se doplňují z nastavení kalendáře.", "during_call",
+    "Appointments need at least {{hours}} hours' notice: never offer or book a time earlier than {{hours}} hours from now.",
+    [ph("hours", "Počet hodin z nastavení kalendáře (Minimální doba předem). Doplňuje ji aplikace.", true)]),
+
+  bookingResultConfirmed: def("call.booking_result_confirmed", "Výsledek rezervace: potvrzeno",
+    "Připojuje se k výsledku nástroje pro rezervaci, když se termín zapsal rovnou jako potvrzený.", "during_call",
+    "Tell the caller the appointment is confirmed."),
+
+  bookingResultConfirmedSms: def("call.booking_result_confirmed_sms", "Výsledek rezervace: potvrzeno + SMS",
+    "Připojuje se k výsledku nástroje pro rezervaci, když je termín potvrzený a volajícímu po hovoru opravdu přijde SMS (známe jeho číslo).", "during_call",
+    "Tell the caller the appointment is confirmed and that a text message with the confirmation will follow."),
+
+  bookingResultPending: def("call.booking_result_pending", "Výsledek rezervace: čeká na potvrzení",
+    "Připojuje se k výsledku nástroje pro rezervaci, když termín čeká na potvrzení majitelem.", "during_call",
+    "Tell the caller the appointment is only preliminary and that the business will confirm it. Do not say it is confirmed and do not promise a text message or e-mail."),
+
   callBusinessContextIntro: def("call.business_context_intro", "Úvod k údajům o firmě (Standard hlas)",
     "V každém hovoru před výčtem údajů o firmě (název, obor, popis, web, služby). Říká asistentovi, že jde o fakta, ne o pokyny.", "during_call",
     `===BUSINESS CONTEXT===
@@ -208,11 +229,11 @@ This business does not book appointments through you. Never offer or promise a s
 
   bookingStatusPending: def("call.booking_status_pending", "Rezervace: čeká na potvrzení majitele",
     "V popisu nástroje pro rezervaci, když si majitel potvrzuje rezervace sám. Asistent řekne volajícímu, že je termín předběžný.", "during_call",
-    "The booking is written as preliminary and waits for the business to confirm it: tell the customer it is preliminary and that the business will confirm it afterwards."),
+    "The booking is written as preliminary and waits for the business to confirm it: tell the customer it is preliminary and that the business will confirm it afterwards. The result of the tool tells you what else to say."),
 
   bookingStatusConfirmed: def("call.booking_status_confirmed", "Rezervace: potvrzená rovnou",
     "V popisu nástroje pro rezervaci, když majitel zvolil zápis rovnou. Asistent řekne volajícímu, že je termín potvrzený.", "during_call",
-    "The booking is confirmed immediately: tell the customer the appointment is confirmed. They will get an SMS with the confirmation."),
+    "The booking is confirmed immediately: tell the customer the appointment is confirmed. The result of the tool tells you what else to say."),
 
   callBusinessInstructions: def("call.business_instructions", "Obal kolem instrukcí zákazníka (Standard hlas)",
     "V hovoru, když zákazník v Assistant → Instructions napsal vlastní instrukce. Tento text je obalí; samotné instrukce zákazníka se tady neupravují.", "during_call",
@@ -460,8 +481,8 @@ export const ENGINE_TOOLS = {
 
   search_knowledge: tool("search_knowledge",
     "Asistent ho vidí v hovoru, když má firma zapnuté znalosti o firmě (nahrané dokumenty). Hledá odpovědi specifické pro firmu.",
-    "Search the business's uploaded documents to answer customer questions. Returns the top {{top_n}} most relevant passages. Use when the customer asks something specific about this business that you don't know from the instructions.",
-    [ph("top_n", "Kolik nejrelevantnějších úryvků se vrací (z nastavení firmy). Doplňuje ji aplikace.")],
+    "Search the business's uploaded documents to answer customer questions. Returns the top {{top_n}} most relevant passages. Use when the customer asks something specific about this business that you don't know from the instructions.{{web_note}}",
+    [ph("top_n", "Kolik nejrelevantnějších úryvků se vrací (z nastavení firmy). Doplňuje ji aplikace."), ph("web_note", "Věta „když tu odpověď nenajdeš, hledej na webu“. Doplňuje ji aplikace jen tehdy, když má firma zapnuté vyhledávání na internetu (jinak je prázdné).")],
     { query: "A concise natural-language search query describing what the customer wants to know." }),
 
   end_call: tool("end_call",

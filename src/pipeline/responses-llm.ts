@@ -9,7 +9,7 @@ export type LlmEvent =
 
 export interface LlmRequest {
   model: string;
-  /** Reasoning effort ("none" is the fast setting measured for gpt-5.6-luna). Empty = leave to the model. */
+  /** Reasoning effort ("low" is the default: follows the rules better than "none" and the answer still starts fast). Empty = leave to the model. */
   effort: string;
   instructions: string;
   /** The conversation so far, in Responses API input items. */

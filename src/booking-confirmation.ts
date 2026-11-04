@@ -81,3 +81,17 @@ export function standaloneBookingSms(
   const def = lang === "cs" ? P.bookingConfirmedSmsCs : P.bookingConfirmedSmsEn;
   return snapshot.text(def, { when, business: ctx.business ?? "" }).trim();
 }
+
+/**
+ * What the assistant must tell the caller about a booking it just made, decided from what the server wrote (confirmed or
+ * waiting) and from what really happens after the call (a text message goes out only when the caller's number is known).
+ * Added to the result of create_calendar_event, so the promise always matches the customer's settings.
+ */
+export function bookingInstruction(result: unknown, callerPhoneKnown: boolean, snapshot: PromptSnapshot = emptySnapshot()): string | null {
+  if (typeof result !== "object" || result === null) return null;
+  const r = result as Record<string, unknown>;
+  if ("error" in r) return null;
+  if (r["status"] === "confirmed") return snapshot.text(callerPhoneKnown ? P.bookingResultConfirmedSms : P.bookingResultConfirmed);
+  if (r["status"] === "pending_review") return snapshot.text(P.bookingResultPending);
+  return null;
+}

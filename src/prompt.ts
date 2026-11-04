@@ -105,8 +105,17 @@ export function buildPromptFromSettings(
     if (greeting) sections.push(greeting);
   }
   // Last on purpose: nothing the customer wrote above can override these (LEA-157).
-  sections.push(snapshot.text(P.callProtectedCore));
+  sections.push(buildProtectedCore(settings, snapshot));
   return sections.join("\n\n");
+}
+
+/** The rules that always apply, with the booking-notice rule of the customer's calendar added when there is one. */
+export function buildProtectedCore(settings: AssistantSettings | null, snapshot: PromptSnapshot): string {
+  const core = snapshot.text(P.callProtectedCore);
+  const hours = Number(settings?._calendar_min_notice_hours ?? 0);
+  const calendarOn = (settings?.capabilities ?? { calendar: true })["calendar"];
+  if (!calendarOn || !(hours > 0)) return core;
+  return `${core}\n${snapshot.text(P.callMinNotice, { hours: String(hours) })}`;
 }
 
 export function buildTools(settings: AssistantSettings | null, snapshot: PromptSnapshot = emptySnapshot(), opts: { live?: boolean } = {}): OpenAITool[] {
@@ -236,7 +245,8 @@ export function buildTools(settings: AssistantSettings | null, snapshot: PromptS
     tools.push({
       type: "function",
       name: "search_knowledge",
-      description: describe("search_knowledge", { top_n: String(topN) }),
+      // When web search is on, a question the documents cannot answer goes to the web before the assistant gives up.
+      description: describe("search_knowledge", { top_n: String(topN), web_note: caps["web_search"] ? snapshot.text(P.knowledgeWebFallback) : "" }),
       parameters: {
         type: "object",
         properties: {

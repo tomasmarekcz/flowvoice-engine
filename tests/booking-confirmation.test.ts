@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  confirmedBookingFromResult, bookingsForSummary, standaloneBookingSms, formatBookingWhen, callerSmsWithConfirmation,
+  confirmedBookingFromResult, bookingInstruction, bookingsForSummary, standaloneBookingSms, formatBookingWhen, callerSmsWithConfirmation,
 } from "../src/booking-confirmation";
 
 // 2026-10-30T13:00:00Z is 14:00 in Prague (winter time started on 25 October 2026).
@@ -91,5 +91,24 @@ describe("bookingMadeFromResult (LEA-149)", () => {
     expect(bookingMadeFromResult({ status: "confirmed" })).toBe(false);
     expect(bookingMadeFromResult(null)).toBe(false);
     expect(bookingMadeFromResult("nope")).toBe(false);
+  });
+});
+
+describe("bookingInstruction (LEA-166)", () => {
+  const confirmed = { id: "e1", status: "confirmed", start_time: FRIDAY.startTime };
+  it("tells the assistant to say confirmed, and to promise a text only when the caller's number is known", () => {
+    expect(bookingInstruction(confirmed, true)).toMatch(/confirmed and that a text message/);
+    const noPhone = bookingInstruction(confirmed, false);
+    expect(noPhone).toMatch(/is confirmed/);
+    expect(noPhone).not.toMatch(/text message/);
+  });
+  it("tells the assistant a waiting booking is preliminary and promises nothing else", () => {
+    const text = bookingInstruction({ id: "e1", status: "pending_review" }, true);
+    expect(text).toMatch(/preliminary/);
+    expect(text).toMatch(/do not promise a text message/i);
+  });
+  it("says nothing when the booking failed", () => {
+    expect(bookingInstruction({ error: "slot_taken" }, true)).toBeNull();
+    expect(bookingInstruction(null, true)).toBeNull();
   });
 });

@@ -858,7 +858,7 @@ export class CallSession implements VoiceSession {
     this.quality.toolStarted();
     this.watchdog?.toolStarted();
     const knowledgeTopN = this.settings?.knowledge_top_n ?? 5;
-    const { result, embeddingTokens } = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN, this.callerPhone);
+    const { result, embeddingTokens } = await executeTool(name, args, this.projectId ?? "", this.calendarProjectId, this.logger.callId ?? undefined, knowledgeTopN, this.callerPhone, this.promptSnapshot);
     if (name === "create_calendar_event") {
       const booking = confirmedBookingFromResult(result);
       if (booking) this.confirmedBookings.push(booking);

@@ -1,6 +1,6 @@
 import type { AssistantSettings } from "./config";
 import type { TranscriptEntry } from "./call-logger";
-import { buildDateTimeBlock, buildPromptFromSettings, buildTools, type OpenAITool } from "./prompt";
+import { buildDateTimeBlock, buildPromptFromSettings, buildProtectedCore, buildTools, type OpenAITool } from "./prompt";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P } from "./prompts/registry";
 import { personaBlock, resolveVoice } from "./persona";
@@ -62,7 +62,7 @@ export function buildLiveVoicePrompt(
   if (instructions) {
     sections.push(snapshot.text(P.liveVoiceBusinessInstructions, { instructions }));
   }
-  sections.push(buildVoiceBackendRules(tools, snapshot), snapshot.text(P.liveVoiceEndingRules), snapshot.text(P.callProtectedCore));
+  sections.push(buildVoiceBackendRules(tools, snapshot), snapshot.text(P.liveVoiceEndingRules), buildProtectedCore(settings, snapshot));
   return sections.join("\n\n");
 }
 

@@ -82,7 +82,7 @@ function setup(opts: { script: LlmEvent[][]; autoFinishVoice?: boolean; language
       connect: () => { const s = new FakeSocket(); sockets.push(s); setImmediate(() => s.emit("open")); return s as never; },
     },
   );
-  return { session, sockets, voice, requests, sent };
+  return { session, sockets, voice, requests, sent, callbacks };
 }
 
 const transcribed = (text: string) => ({ type: "conversation.item.input_audio_transcription.completed", transcript: text });
@@ -120,7 +120,7 @@ describe("PipelineCallSession", () => {
     await session.start();
     sockets[0].say(transcribed("Kdy máte volno?"));
     await flush(20);
-    expect(h.executeTool).toHaveBeenCalledWith("get_day_availability", { date: "2026-11-04" }, "project-1", expect.anything(), "call-1", expect.anything(), "+420123456789");
+    expect(h.executeTool).toHaveBeenCalledWith("get_day_availability", { date: "2026-11-04" }, "project-1", expect.anything(), "call-1", expect.anything(), "+420123456789", expect.anything());
     expect(requests).toHaveLength(2);
     const second = requests[1].input as Array<Record<string, unknown>>;
     expect(second.map((i) => i["type"] ?? i["role"])).toEqual(["user", "function_call", "function_call_output"]);
@@ -154,6 +154,50 @@ describe("PipelineCallSession", () => {
     const input = requests[1].input as Array<{ role?: string; content?: string }>;
     expect(input.filter((i) => i.role === "assistant")).toEqual([]);
     expect(input.map((i) => i.content)).toEqual(["První otázka", "Počkejte, druhá otázka"]);
+  });
+
+  describe("what counts as the caller speaking (LEA-166)", () => {
+    it("sends no vocabulary hint to speech recognition", async () => {
+      const { session, sockets } = setup({ script: [] });
+      await session.start();
+      const update = sockets[0].sent.find((m) => m["type"] === "session.update") as { session: { audio: { input: { transcription: Record<string, unknown> } } } };
+      expect(update.session.audio.input.transcription).not.toHaveProperty("prompt");
+    });
+
+    it("does not cut the assistant for a sound shorter than half a second", async () => {
+      const { session, sockets, callbacks } = setup({ script: [[{ type: "text", delta: "Dobrý den, tohle je dlouhá odpověď." }]], autoFinishVoice: false });
+      await session.start();
+      sockets[0].say(transcribed("Otázka"));
+      await flush();
+      sockets[0].say({ type: "input_audio_buffer.speech_started" });
+      await flush(100);
+      sockets[0].say({ type: "input_audio_buffer.speech_stopped" });
+      await flush(600);
+      expect(callbacks.clearAudio).not.toHaveBeenCalled();
+    });
+
+    it("cuts the assistant when the sound lasts half a second", async () => {
+      const { session, sockets, callbacks } = setup({ script: [[{ type: "text", delta: "Dobrý den, tohle je dlouhá odpověď." }]], autoFinishVoice: false });
+      await session.start();
+      sockets[0].say(transcribed("Otázka"));
+      await flush();
+      sockets[0].say({ type: "input_audio_buffer.speech_started" });
+      await flush(600);
+      expect(callbacks.clearAudio).toHaveBeenCalledTimes(1);
+    });
+
+    it("cuts the assistant for a short word that is transcribed", async () => {
+      const { session, sockets, callbacks } = setup({ script: [[{ type: "text", delta: "Dobrý den, tohle je dlouhá odpověď." }], [{ type: "text", delta: "Ano." }]], autoFinishVoice: false });
+      await session.start();
+      sockets[0].say(transcribed("Otázka"));
+      await flush();
+      sockets[0].say({ type: "input_audio_buffer.speech_started" });
+      await flush(100);
+      sockets[0].say({ type: "input_audio_buffer.speech_stopped" });
+      sockets[0].say(transcribed("Ne"));
+      await flush();
+      expect(callbacks.clearAudio).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("speech not understood", () => {
