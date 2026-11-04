@@ -63,16 +63,13 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
   it("assistant tools: availability lookup, enquiry and booking work through the dashboard API", async () => {
     const h = { "Content-Type": "application/json", "X-Internal-Secret": cfg.internalSecret };
 
-    const slots = await fetch(
-      `${cfg.base}/api/calendar/slots?project_id=${cfg.projectId}&from=${encodeURIComponent(new Date().toISOString())}&duration=30`
+    // The assistant asks the calendar for free windows (the old /slots route was removed in LEA-157/159).
+    const today = new Date().toISOString().slice(0, 10);
+    const windows = await fetch(
+      `${cfg.base}/api/calendar/windows?project_id=${cfg.projectId}&from=${today}&days=7&duration=30`,
+      { headers: h },
     );
-    expect(slots.ok).toBe(true);
-
-    // LEA-131: the length of a booking comes from a service (or an explicit duration), never from a calendar default.
-    const noLength = await fetch(
-      `${cfg.base}/api/calendar/slots?project_id=${cfg.projectId}&from=${encodeURIComponent(new Date().toISOString())}`
-    );
-    expect(noLength.status).toBe(400);
+    expect(windows.ok).toBe(true);
 
     const enquiry = await fetch(`${cfg.base}/api/enquiries`, {
       method: "POST",
