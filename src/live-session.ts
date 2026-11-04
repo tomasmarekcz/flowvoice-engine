@@ -162,7 +162,7 @@ export class LiveCallSession implements VoiceSession {
       sayAndHangUp: (text, reason) => this.sayAndHangUp(text, reason),
       hangUp: (reason) => { this.endReason = reason; this.hangupFinal = true; this.sendHangupMark(); },
       texts: fixedTexts(this.settings, this.promptSnapshot),
-    }, this.twilioCallSid ? maxCallMs(this.settings) : 24 * 60 * 60_000); // a test call keeps its own time limit
+    }, this.settings ? maxCallMs(this.settings) : 24 * 60 * 60_000); // a test call has the same time limit as a real call (LEA-174); only a call without a project is unlimited
     this.watchdog.start();
   }
 

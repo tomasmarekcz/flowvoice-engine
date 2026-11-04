@@ -58,10 +58,11 @@ class FakeVoice implements VoiceProvider {
 
 const flush = async (ms = 5) => { await new Promise((r) => setTimeout(r, ms)); };
 
-function setup(opts: { script: LlmEvent[][]; autoFinishVoice?: boolean; language?: "cs" | "en" }) {
+function setup(opts: { script: LlmEvent[][]; autoFinishVoice?: boolean; language?: "cs" | "en"; endCheck?: string }) {
   const sockets: FakeSocket[] = [];
   const voice = new FakeVoice(opts.autoFinishVoice ?? true);
   const requests: LlmRequest[] = [];
+  const checks: LlmRequest[] = []; // the small "is the call over?" question (no tools)
   let round = 0;
   const sent = { json: [] as Array<Record<string, unknown>>, endCall: 0, marks: [] as string[] };
   const callbacks = {
@@ -78,11 +79,13 @@ function setup(opts: { script: LlmEvent[][]; autoFinishVoice?: boolean; language
     {
       audio: "pcmu",
       voice: () => voice,
-      llm: async function* (req) { requests.push({ ...req, input: [...req.input] }); for (const e of opts.script[round++] ?? []) yield e; },
+      llm: async function* (req) {
+        if (req.tools.length === 0) { checks.push(req); yield { type: "text", delta: opts.endCheck ?? "CONTINUE" }; return; }
+        requests.push({ ...req, input: [...req.input] }); for (const e of opts.script[round++] ?? []) yield e; },
       connect: () => { const s = new FakeSocket(); sockets.push(s); setImmediate(() => s.emit("open")); return s as never; },
     },
   );
-  return { session, sockets, voice, requests, sent, callbacks };
+  return { session, sockets, voice, requests, checks, sent, callbacks };
 }
 
 const transcribed = (text: string) => ({ type: "conversation.item.input_audio_transcription.completed", transcript: text });
@@ -138,6 +141,44 @@ describe("PipelineCallSession", () => {
     session.handleTwilioMark(sent.marks[0]);
     expect(sent.endCall).toBe(1);
     expect(h.finishCall).toHaveBeenCalledTimes(1);
+  });
+
+  describe("safety net for end_call (LEA-174)", () => {
+    it("hangs up when the small model says the call is over, although the main model forgot end_call", async () => {
+      const { session, sockets, sent, checks } = setup({
+        script: [[{ type: "text", delta: "Na shledanou, Šimone." }]],
+        endCheck: "END",
+      });
+      await session.start();
+      sockets[0].say(transcribed("Už ne, děkuju. Na shledanou."));
+      await flush(30);
+      expect(checks).toHaveLength(1);
+      expect(sent.marks).toHaveLength(1);
+      session.handleTwilioMark(sent.marks[0]);
+      expect(sent.endCall).toBe(1);
+    });
+
+    it("keeps the call open when the small model says it goes on", async () => {
+      const { session, sockets, sent, checks } = setup({
+        script: [[{ type: "text", delta: "Mohu vám ještě s něčím pomoci?" }]],
+        endCheck: "CONTINUE",
+      });
+      await session.start();
+      sockets[0].say(transcribed("Děkuju."));
+      await flush(30);
+      expect(checks).toHaveLength(1);
+      expect(sent.marks).toHaveLength(0);
+    });
+
+    it("does not ask when the main model ended the call itself", async () => {
+      const { session, sockets, checks } = setup({
+        script: [[{ type: "text", delta: "Na shledanou." }, { type: "tool_call", callId: "e1", name: "end_call", arguments: "{}" }]],
+      });
+      await session.start();
+      sockets[0].say(transcribed("To je vše."));
+      await flush(30);
+      expect(checks).toHaveLength(0);
+    });
   });
 
   it("drops an interrupted answer that the caller never heard", async () => {

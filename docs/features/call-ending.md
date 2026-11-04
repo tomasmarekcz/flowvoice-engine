@@ -19,9 +19,9 @@ flowchart TD
 
 1. **Normal ending.** The assistant says goodbye and calls `end_call` in the same turn. The session sends a Twilio "mark" after the goodbye audio; Twilio echoes it when the audio has been played; only then the stream is closed and the summary is written (`end()` runs at that moment, not before). If the caller speaks again more than 1.5 s after `end_call` (`RESUME_GRACE_MS`), the hang-up is taken back and the call goes on. If Twilio never echoes the mark, the line is closed after 15 s (`END_CALL_MARK_FALLBACK_MS`).
 2. **`end_call` without a goodbye.** The model sometimes calls `end_call` without saying anything (seen in a simulated call on 2026-11-03). If the answer had no words or sound, the engine says the goodbye sentence itself (`call.goodbye_*`) and hangs up after it (Standard, Hybrid, Pipeline; in Live the voice always says it).
-3. **Safety net for a forgotten `end_call`.** If the assistant's last words contain a goodbye (`containsGoodbye`) and the caller is silent for 6 s, the engine hangs up without a further question.
+3. **Safety net for a forgotten `end_call`.** (a) If the assistant's last words contain a goodbye (`containsGoodbye`) and the caller is silent for 6 s, the engine hangs up without a further question. (b) Pipeline only (LEA-174): after every answer without a tool call, a second small model call (same model and effort as the brain, prompt `engine.call.end_check`, input only the last six lines, answer `END` or `CONTINUE`, 8 s timeout) runs while the answer is spoken. On `END` the engine hangs up like after `end_call` (the caller speaking again takes it back). Cost: a few hundred input tokens per answer, counted in the call's LLM usage. A failed check is ignored (the call goes on). Seen on 2026-11-04: the model said "Na shledanou" three times without calling `end_call`.
 4. **Silence.** 6 s after the assistant stops speaking (`SILENCE_ASK_MS`) it says the "Are you still there?" sentence; after 6 s more (`SILENCE_HANGUP_MS`) it says the goodbye sentence and hangs up. Not counted while the assistant speaks, a tool runs, the model is answering, or the connection is being re-made.
-5. **Length limit.** `assistant_settings.max_call_minutes` (default 10, clamped to 2 to 30 by `maxCallMs`). One minute before the end (`LIMIT_WARNING_BEFORE_MS`) the assistant warns the caller; at the limit it says goodbye and hangs up. Only for phone calls (a call with a Twilio call id); test calls keep their own limit in `handlers/browser.ts`.
+5. **Length limit.** `assistant_settings.max_call_minutes` (default 10, clamped to 2 to 30 by `maxCallMs`). One minute before the end (`LIMIT_WARNING_BEFORE_MS`) the assistant warns the caller; at the limit it says goodbye and hangs up. It applies to phone calls and to test calls alike (LEA-174: before, a test call ran without this limit and so showed behaviour a real call would not have). A test call also keeps the overall cap from its ticket (`handlers/browser.ts`); whichever comes first ends the call.
 6. **Lost connection to OpenAI (Standard, Hybrid, Live).** A recorded "one moment" sentence is played at once. The engine opens a new connection (`MAX_RECONNECTS` = 2, 6 s each); the new session gets the same settings plus the transcript so far in its instructions ("CALL IN PROGRESS: do not greet again") and the caller's audio that arrived meanwhile (up to 1.5 s, `InputBuffer`). On success the assistant says the "sorry about the short interruption" sentence and carries on. If both attempts fail, a recorded apology is played, the call is hung up, `calls.end_reason = 'technical_error'` and `calls.status = 'follow-up'` are written, and the owner's SMS/e-mail (when the owner has them on) carries a warning line and is sent even for a very short call.
 7. **Pipeline.** Speech-recognition drops were already handled (one reconnect, then apology). New: if the language model fails twice in a row, or fails after one retry, the same apology and hang-up apply.
 
@@ -53,7 +53,7 @@ flowchart TD
 
 - Silence, limit and error endings cannot be taken back by the caller speaking (only an `end_call` can).
 - A customer who switches `end_call` off still gets the silence and limit endings.
-- A browser test call has no recorded sentences (they are in the phone's format) and no length limit from this feature.
+- A browser test call has no recorded sentences (they are in the phone's format); it has the same length limit as a phone call.
 
 ## 6. Dependencies
 
@@ -63,7 +63,7 @@ flowchart TD
 ## 7. How to test it
 
 - Automated: `tests/call-ending.test.ts`, `tests/live-session-ending.test.ts`, `tests/standard-session-ending.test.ts`, `tests/pipeline-session.test.ts` (apology and end reason), `tests/prompt.test.ts`.
-- Staging: a Test call from the dashboard (browser): stay silent for 6 s and 12 s. A phone call is needed for the recorded sentences and the length limit (set `max_call_minutes` to 2 on a test project).
+- Staging: a Test call from the dashboard (browser): stay silent for 6 s and 12 s. The length limit also works in a Test call (set `max_call_minutes` to 2: the warning comes after 1 minute, the goodbye at 2). A phone call is needed only for the recorded sentences.
 - Lost connection: `src/scripts/phone-sim.ts` against staging with the OpenAI socket dropped.
 
 ## 8. Decisions and known gaps

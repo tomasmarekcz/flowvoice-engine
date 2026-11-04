@@ -24,7 +24,7 @@ import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { responsesLlm, type LlmStream } from "./pipeline/responses-llm";
 import { finishCall } from "./call-finish";
-import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, type EndReason } from "./call-ending";
+import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, endCallEnabled, type EndReason } from "./call-ending";
 
 const STT_START_TIMEOUT_MS = 6000;
 // A tool that takes longer than this gets a short "one moment" sentence so the caller does not sit in silence.
@@ -158,7 +158,7 @@ export class PipelineCallSession implements VoiceSession {
       sayAndHangUp: (text, reason) => this.sayAndHangUp(text, reason),
       hangUp: (reason) => { this.endReason = reason; void this.hangUp(this.turnId, false); },
       texts: fixedTexts(settings, promptSnapshot),
-    }, this.twilioCallSid ? maxCallMs(settings) : 24 * 60 * 60_000); // a test call keeps its own time limit
+    }, settings ? maxCallMs(settings) : 24 * 60 * 60_000); // a test call has the same time limit as a real call (LEA-174); only a call without a project is unlimited
     this.watchdog.start();
   }
 
@@ -377,7 +377,11 @@ export class PipelineCallSession implements VoiceSession {
           this.assistantEntry = this.history.length - 1;
           this.logger.handleOpenAIEvent({ type: "response.output_text.done", text });
         }
-        if (calls.length === 0) return;
+        if (calls.length === 0) {
+          // A second, small model checks whether this answer was the end of the call (the main model sometimes forgets end_call).
+          if (text.trim()) void this.checkCallFinished(turn);
+          return;
+        }
         for (const call of calls) {
           this.history.push({ type: "function_call", call_id: call.callId, name: call.name, arguments: call.arguments });
           if (call.name === "end_call") {
@@ -407,6 +411,34 @@ export class PipelineCallSession implements VoiceSession {
       }
     } finally {
       if (turn === this.turnId) { this.turnActive = false; this.watchdog?.responseActive(false); }
+    }
+  }
+
+  // LEA-174: safety net for end_call. After an answer without a tool call, a small model reads the last lines and says
+  // whether the call is over. It runs while the answer is spoken; if the caller speaks meanwhile, the call goes on.
+  private async checkCallFinished(turn: number): Promise<void> {
+    if (this.ended || this.givingUp || !endCallEnabled(this.settings)) return;
+    const lines = this.history
+      .filter((h): h is { role: "user" | "assistant"; content: string } => "role" in h)
+      .slice(-6)
+      .map((h) => `${h.role === "user" ? "Caller" : "Assistant"}: ${h.content}`);
+    if (lines.length < 2) return;
+    try {
+      let answer = "";
+      const stream = this.llm({
+        model: pipelineLlmModel(), effort: pipelineLlmEffort(), instructions: this.promptSnapshot.text(P.endCheck),
+        input: [{ role: "user", content: lines.join("\n") }], tools: [], signal: AbortSignal.timeout(8000),
+      });
+      for await (const event of stream) {
+        if (event.type === "text") answer += event.delta;
+        else if (event.type === "usage") { this.usage.llmInput += event.inputTokens; this.usage.llmCachedInput += event.cachedInputTokens; this.usage.llmOutput += event.outputTokens; }
+      }
+      const finished = /^\s*END\b/i.test(answer);
+      logger.info("end check", { event: "call.end_check", finished });
+      if (!finished || turn !== this.turnId || this.ended) return;
+      await this.hangUp(turn, true);
+    } catch (e) {
+      logger.warn("end check failed", { event: "call.end_check_failed", err: e });
     }
   }
 

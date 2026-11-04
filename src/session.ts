@@ -183,7 +183,7 @@ export class CallSession implements VoiceSession {
       sayAndHangUp: (text, reason) => this.sayAndHangUp(text, reason),
       hangUp: (reason) => { this.endReason = reason; this.beginHangup(false); },
       texts: fixedTexts(settings, this.promptSnapshot),
-    }, this.twilioCallSid ? maxCallMs(settings) : 24 * 60 * 60_000); // a test call keeps its own time limit
+    }, settings ? maxCallMs(settings) : 24 * 60 * 60_000); // a test call has the same time limit as a real call (LEA-174); only a call without a project is unlimited
     this.watchdog.start();
 
     // Hybrid: the call only counts as started once the voice is ready, so a voice that cannot start falls back to Standard.

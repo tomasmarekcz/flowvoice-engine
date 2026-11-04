@@ -101,6 +101,10 @@ Do not repeat the same wording every time; vary acknowledgements and phrasing.`,
     `===SPOKEN ANSWERS===
 Your answers are read aloud on the phone by a voice. Write them exactly as they should be spoken: short, natural sentences in plain text, with no lists, markdown, emoji, headings or web addresses read letter by letter. Write numbers, times, dates and prices as words in the language you speak. When the call is finished, say a brief goodbye in your answer and call end_call in that same turn.`),
 
+  endCheck: def("call.end_check", "Kontrola, zda je hovor dokončen (Vlastní řetězec)",
+    "Ve Vlastním řetězci po každé odpovědi asistenta bez volání nástroje. Malý druhý model rozhodne, zda asistent právě dokončil rozloučení a volající už nic nechce; pak se hovor ukončí, i když hlavní model zapomněl zavolat end_call.", "during_call",
+    `You watch a phone call between a business's assistant and a caller. Decide whether the call is finished right now. It is finished only when both are true: the assistant's last message is a final goodbye (not a question and not an offer of more help), and the caller has said they need nothing more or has said goodbye. Answer with exactly one word: END or CONTINUE. When unsure, answer CONTINUE.`),
+
   fillerCs: def("speech.filler_cs", "Překlenovací věta při delším čekání (česky)",
     "Ve Vlastním řetězci, když nástroj (kalendář, hledání) trvá déle než chvilku. Asistent řekne tuto větu, aby volající neslyšel ticho.", "during_call",
     `Moment, hned se podívám.`),
