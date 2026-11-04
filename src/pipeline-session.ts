@@ -24,7 +24,7 @@ import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { responsesLlm, type LlmStream } from "./pipeline/responses-llm";
 import { finishCall } from "./call-finish";
-import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, endCallEnabled, type EndReason } from "./call-ending";
+import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, endCallEnabled, speaksEnglish, type EndReason } from "./call-ending";
 
 const STT_START_TIMEOUT_MS = 6000;
 // A tool that takes longer than this gets a short "one moment" sentence so the caller does not sit in silence.
@@ -36,7 +36,10 @@ const UNCLEAR_MIN_SPEECH_MS = 700;
 const MAX_UNCLEAR_IN_ROW = 2;
 // Sound counts as the caller speaking (and cuts the assistant off) only after it lasts this long or is transcribed into words:
 // a click, a cough or the assistant's own voice coming back through the line must not stop the assistant mid-sentence.
-const BARGE_IN_CONFIRM_MS = 500;
+// (LEA-175: one second; was half a second.)
+const BARGE_IN_CONFIRM_MS = 1000;
+// An answer this short is finished in under a second: the caller waiting for it is better than cutting it off (LEA-175).
+const NO_BARGE_IN_WORDS = 5;
 
 export interface PipelineOptions {
   /** Audio format of the caller's side: "pcmu" (phone line, default on Twilio) or PCM 24 kHz (browser test call). */
@@ -154,7 +157,7 @@ export class PipelineCallSession implements VoiceSession {
     }
 
     this.watchdog = new CallWatchdog({
-      speak: (text) => this.speakFixed(text),
+      speak: (text) => this.speakHint(text),
       sayAndHangUp: (text, reason) => this.sayAndHangUp(text, reason),
       hangUp: (reason) => { this.endReason = reason; void this.hangUp(this.turnId, false); },
       texts: fixedTexts(settings, promptSnapshot),
@@ -183,7 +186,8 @@ export class PipelineCallSession implements VoiceSession {
                 noise_reduction: { type: "near_field" },
                 transcription: {
                   model: pipelineSttModel(),
-                  ...(language === "auto" ? {} : { language }),
+                  // A soft hint, not a lock (LEA-175): the caller is expected to speak this language but may switch. No word list (LEA-166).
+                  prompt: this.promptSnapshot.text(P.sttHint, { language: language === "en" || (language === "auto" && speaksEnglish(settings)) ? "English" : "Czech" }),
                 },
                 turn_detection: { type: "server_vad", threshold: 0.8, prefix_padding_ms: 300, silence_duration_ms: 400 },
               },
@@ -247,7 +251,14 @@ export class PipelineCallSession implements VoiceSession {
     if (this.ended) return;
     this.watchdog?.callerSpoke();
     this.cancelHangupIfCallerSpeaks();
-    if (this.clock.audible() || this.speech?.busy) this.bargeIn();
+    if ((this.clock.audible() || this.speech?.busy) && !this.answerIsShort()) this.bargeIn();
+  }
+
+  // The answer being spoken has only a few words: let it finish.
+  private answerIsShort(): boolean {
+    const entry = this.assistantEntry !== null ? this.history[this.assistantEntry] : null;
+    if (!entry || !("role" in entry) || entry.role !== "assistant") return false;
+    return entry.content.trim().split(/\s+/).length <= NO_BARGE_IN_WORDS;
   }
 
   // The caller talked for a while but nothing could be made of it: ask once more instead of staying silent.
@@ -555,9 +566,63 @@ export class PipelineCallSession implements VoiceSession {
     this.endReason = reason;
     this.watchdog?.suspend(true);
     this.abortTurn();
-    this.speakFixed(text);
+    await this.speakHint(text);
     await this.speech?.drained();
     this.beginHangup(false);
+  }
+
+  // LEA-175: silence and call-length sentences are said by the model itself (a system hint in the conversation), so they come
+  // in the right language, address and voice. The recorded text of the watchdog is the fallback when the model says nothing.
+  private hintFor(fixed: string): string | null {
+    const texts = fixedTexts(this.settings, this.promptSnapshot);
+    const snap = this.promptSnapshot;
+    if (fixed === texts.silenceAsk) return snap.text(P.hintSilenceAsk);
+    if (fixed === texts.silenceBye) return snap.text(P.hintSilenceBye);
+    if (fixed === texts.limitWarning) return snap.text(P.hintLimitWarning);
+    if (fixed === texts.limitBye) return snap.text(P.hintLimitBye);
+    return null;
+  }
+
+  private async speakHint(fixed: string): Promise<void> {
+    const hint = this.hintFor(fixed);
+    if (this.ended || !hint) { this.speakFixed(fixed); return; }
+    this.abortTurn();
+    const turn = this.turnId;
+    const ctrl = new AbortController();
+    this.turnCtrl = ctrl;
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    this.turnActive = true;
+    this.watchdog?.responseActive(true);
+    this.assistantEntry = null;
+    let text = "";
+    try {
+      const stream = this.llm({
+        model: pipelineLlmModel(), effort: pipelineLlmEffort(), instructions: this.instructions,
+        input: [...this.history, { role: "developer", content: hint }], tools: [], signal: ctrl.signal,
+      });
+      for await (const event of stream) {
+        if (turn !== this.turnId) return; // the caller spoke meanwhile: the new turn takes over
+        if (event.type === "text") { text += event.delta; this.speech?.pushText(event.delta); }
+        else if (event.type === "usage") { this.usage.llmInput += event.inputTokens; this.usage.llmCachedInput += event.cachedInputTokens; this.usage.llmOutput += event.outputTokens; }
+      }
+      if (turn !== this.turnId) return;
+      this.speech?.endText();
+      if (text.trim()) {
+        this.history.push({ role: "assistant", content: text });
+        this.assistantEntry = this.history.length - 1;
+        this.logger.handleOpenAIEvent({ type: "response.output_text.done", text });
+        return;
+      }
+    } catch (e) {
+      if (turn !== this.turnId) return;
+      logger.warn("hint turn failed, using the recorded sentence", { event: "pipeline.hint_failed", err: e });
+      this.speech?.endText();
+      if (text.trim()) return;
+    } finally {
+      clearTimeout(timer);
+      if (turn === this.turnId) { this.turnActive = false; this.watchdog?.responseActive(false); }
+    }
+    this.speakFixed(fixed);
   }
 
   handleTwilioMark(name: string): void {

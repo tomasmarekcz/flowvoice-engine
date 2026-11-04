@@ -93,6 +93,8 @@ export function buildPromptFromSettings(
     snapshot.text(P.callToolsPreamble),
     snapshot.text(P.callToolFailureRule),
   ];
+  const guide = buildToolsGuide(settings, snapshot);
+  if (guide) sections.push(guide);
   // LEA-130: a business that does not book appointments through the assistant (calendar off) gets enquiries instead.
   const calendarOn = (settings?.capabilities ?? { calendar: true })["calendar"];
   if (settings && !calendarOn) sections.push(snapshot.text(P.callBookingEnquiryOnly));
@@ -107,6 +109,17 @@ export function buildPromptFromSettings(
   // Last on purpose: nothing the customer wrote above can override these (LEA-157).
   sections.push(buildProtectedCore(settings, snapshot));
   return sections.join("\n\n");
+}
+
+/** LEA-175: which tool to use for which question, only for the capabilities that are on (ending the call has its own rule). */
+export function buildToolsGuide(settings: AssistantSettings | null, snapshot: PromptSnapshot): string | null {
+  const caps = settings?.capabilities ?? { calendar: true, lead_collection: true };
+  const lines: string[] = [];
+  if (caps["calendar"]) lines.push(snapshot.text(P.callToolsGuideServices), snapshot.text(P.callToolsGuideAvailability));
+  if (caps["business_knowledge"]) lines.push(snapshot.text(caps["web_search"] ? P.callToolsGuideKnowledgeWeb : P.callToolsGuideKnowledge));
+  else if (caps["web_search"]) lines.push(snapshot.text(P.callToolsGuideWeb));
+  if (caps["enquiries"] !== false) lines.push(snapshot.text(P.callToolsGuideUnknown));
+  return lines.length > 0 ? `===WHEN TO USE WHICH TOOL===\n${lines.join("\n")}` : null;
 }
 
 /** The rules that always apply, with the booking-notice rule of the customer's calendar added when there is one. */

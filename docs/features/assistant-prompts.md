@@ -62,3 +62,7 @@ Known gaps: the Czech phrase "(mluv hned)" inside the English Live greeting inst
 ---
 
 **Owner:** Tomáš Marek · **Last verified:** 2026-11-03, branch `tomasmarekcz/lea-157-159-162` · **Issues:** LEA-157
+
+## Which tool for which question (LEA-175)
+
+`buildToolsGuide` (`src/prompt.ts`) adds a `===WHEN TO USE WHICH TOOL===` section after the tool rules, built only from the capabilities that are on: services and availability (calendar), search in knowledge then web (knowledge and web search, or either alone), and a call-back request when the answer is nowhere (enquiries). It never repeats how to end a call (that is `call.ending_rule`). Texts: `engine.call.tools_guide_*` in the registry. Other new prompts: `engine.stt.hint` (speech recognition language hint), `engine.hint.silence_ask`, `hint.silence_bye`, `hint.limit_warning`, `hint.limit_bye` (what the model is told when it has to say the silence and call-length sentences), `engine.call.end_check` (small model that decides whether the call is over).

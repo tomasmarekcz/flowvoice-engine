@@ -24,6 +24,7 @@ vi.mock("../src/ical-refresh", () => ({ refreshExternalCalendars: () => {} }));
 
 import { PipelineCallSession } from "../src/pipeline-session";
 import { emptySnapshot } from "../src/prompts/core";
+import { fixedTexts } from "../src/call-ending";
 import type { LlmEvent, LlmRequest } from "../src/pipeline/responses-llm";
 import type { VoiceEvents, VoiceProvider } from "../src/voice/types";
 
@@ -80,7 +81,7 @@ function setup(opts: { script: LlmEvent[][]; autoFinishVoice?: boolean; language
       audio: "pcmu",
       voice: () => voice,
       llm: async function* (req) {
-        if (req.tools.length === 0) { checks.push(req); yield { type: "text", delta: opts.endCheck ?? "CONTINUE" }; return; }
+        if (req.tools.length === 0 && req.instructions.startsWith("You watch a phone call")) { checks.push(req); yield { type: "text", delta: opts.endCheck ?? "CONTINUE" }; return; }
         requests.push({ ...req, input: [...req.input] }); for (const e of opts.script[round++] ?? []) yield e; },
       connect: () => { const s = new FakeSocket(); sockets.push(s); setImmediate(() => s.emit("open")); return s as never; },
     },
@@ -198,14 +199,16 @@ describe("PipelineCallSession", () => {
   });
 
   describe("what counts as the caller speaking (LEA-166)", () => {
-    it("sends no vocabulary hint to speech recognition", async () => {
+    it("tells speech recognition the expected language softly, without a word list and without locking it", async () => {
       const { session, sockets } = setup({ script: [] });
       await session.start();
       const update = sockets[0].sent.find((m) => m["type"] === "session.update") as { session: { audio: { input: { transcription: Record<string, unknown> } } } };
-      expect(update.session.audio.input.transcription).not.toHaveProperty("prompt");
+      const tr = update.session.audio.input.transcription;
+      expect(tr).not.toHaveProperty("language");
+      expect(tr["prompt"]).toBe("The caller speaks Czech. Transcribe the speech in Czech. Use another language only when the caller clearly speaks another language.");
     });
 
-    it("does not cut the assistant for a sound shorter than half a second", async () => {
+    it("does not cut the assistant for a sound shorter than one second", async () => {
       const { session, sockets, callbacks } = setup({ script: [[{ type: "text", delta: "Dobrý den, tohle je dlouhá odpověď." }]], autoFinishVoice: false });
       await session.start();
       sockets[0].say(transcribed("Otázka"));
@@ -217,14 +220,24 @@ describe("PipelineCallSession", () => {
       expect(callbacks.clearAudio).not.toHaveBeenCalled();
     });
 
-    it("cuts the assistant when the sound lasts half a second", async () => {
+    it("cuts the assistant when the sound lasts one second", async () => {
       const { session, sockets, callbacks } = setup({ script: [[{ type: "text", delta: "Dobrý den, tohle je dlouhá odpověď." }]], autoFinishVoice: false });
       await session.start();
       sockets[0].say(transcribed("Otázka"));
       await flush();
       sockets[0].say({ type: "input_audio_buffer.speech_started" });
-      await flush(600);
+      await flush(1100);
       expect(callbacks.clearAudio).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets a very short answer finish instead of cutting it off", async () => {
+      const { session, sockets, callbacks } = setup({ script: [[{ type: "text", delta: "Rozumím." }]], autoFinishVoice: false });
+      await session.start();
+      sockets[0].say(transcribed("Otázka"));
+      await flush();
+      sockets[0].say({ type: "input_audio_buffer.speech_started" });
+      await flush(1100);
+      expect(callbacks.clearAudio).not.toHaveBeenCalled();
     });
 
     it("cuts the assistant for a short word that is transcribed", async () => {
@@ -238,6 +251,29 @@ describe("PipelineCallSession", () => {
       sockets[0].say(transcribed("Ne"));
       await flush();
       expect(callbacks.clearAudio).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("silence and limit sentences said by the model (LEA-175)", () => {
+    it("asks the model to say the silence question and does not add the hint to the conversation", async () => {
+      const { session, voice, requests } = setup({ script: [[{ type: "text", delta: "Jste ještě na lince?" }]] });
+      await session.start();
+      const fixed = fixedTexts({ language: "cs" } as never, emptySnapshot());
+      await (session as unknown as { speakHint(t: string): Promise<void> }).speakHint(fixed.silenceAsk);
+      expect(requests).toHaveLength(1);
+      const input = requests[0].input as Array<{ role?: string; content?: string }>;
+      expect(input[input.length - 1].role).toBe("developer");
+      expect(requests[0].tools).toEqual([]);
+      expect(voice.spoken.join(" ")).toContain("Jste ještě na lince?");
+      expect((session as unknown as { history: Array<{ role?: string }> }).history.some((h) => h.role === "developer")).toBe(false);
+    });
+
+    it("falls back to the recorded sentence when the model says nothing", async () => {
+      const { session, voice } = setup({ script: [[]] });
+      await session.start();
+      const fixed = fixedTexts({ language: "cs" } as never, emptySnapshot());
+      await (session as unknown as { speakHint(t: string): Promise<void> }).speakHint(fixed.silenceAsk);
+      expect(voice.spoken.join(" ")).toContain(fixed.silenceAsk);
     });
   });
 

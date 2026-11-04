@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPromptFromSettings, buildProtectedCore, buildTools } from "../src/prompt";
+import { buildPromptFromSettings, buildProtectedCore, buildTools, buildToolsGuide } from "../src/prompt";
 import { emptySnapshot } from "../src/prompts/core";
 import type { AssistantSettings } from "../src/config";
 
@@ -305,5 +305,30 @@ describe("notice rule and knowledge fallback (LEA-166)", () => {
       buildTools({ ...BASE, capabilities: caps }, emptySnapshot()).find((t) => t.name === "search_knowledge")?.description ?? "";
     expect(desc({ business_knowledge: true, web_search: true })).toContain("use web_search");
     expect(desc({ business_knowledge: true })).not.toContain("web_search");
+  });
+});
+
+describe("which tool for which question (LEA-175)", () => {
+  const guide = (capabilities: Record<string, boolean>) => buildToolsGuide({ ...BASE, capabilities }, emptySnapshot());
+
+  it("lists only what the enabled capabilities can do", () => {
+    const text = guide({ calendar: true, business_knowledge: true, web_search: true })!;
+    expect(text).toContain("get_services");
+    expect(text).toContain("get_day_availability");
+    expect(text).toContain("search_knowledge first; if it finds nothing, use web_search");
+    expect(text).toContain("create_enquiry");
+  });
+
+  it("has no calendar lines without the calendar and no web fallback without web search", () => {
+    const text = guide({ business_knowledge: true })!;
+    expect(text).not.toContain("get_services");
+    expect(text).toContain("search_knowledge first.");
+    expect(text).not.toContain("web_search");
+  });
+
+  it("does not repeat the ending rule and is part of the call prompt once", () => {
+    const prompt = buildPromptFromSettings({ ...BASE, capabilities: { calendar: true } }, null, {}, emptySnapshot());
+    expect(prompt.match(/===WHEN TO USE WHICH TOOL===/g)).toHaveLength(1);
+    expect(guide({ calendar: true })).not.toContain("end_call");
   });
 });
