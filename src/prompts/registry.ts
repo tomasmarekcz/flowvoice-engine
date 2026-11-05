@@ -106,7 +106,7 @@ Your answers are read aloud on the phone by a voice. Write them exactly as they 
     `You watch a phone call between a business's assistant and a caller. Decide whether the call is finished right now. It is finished only when both are true: the assistant's last message is a final goodbye (not a question and not an offer of more help), and the caller has said they need nothing more or has said goodbye. Answer with exactly one word: END or CONTINUE. When unsure, answer CONTINUE.`),
 
   fillerCs: def("speech.filler_cs", "Překlenovací věta při delším čekání (česky)",
-    "Ve Vlastním řetězci, když nástroj (kalendář, hledání) trvá déle než chvilku. Asistent řekne tuto větu, aby volající neslyšel ticho.", "during_call",
+    "Ve Vlastním řetězci, když nástroj (kalendář, hledání) trvá déle než chvilku. Asistent řekne tuto větu, aby volající neslyšel ticho. Zatím VYPNUTO (LEA-180): věta nezazní, dokud se v enginu nezapne PIPELINE_BRIDGE_SENTENCES.", "during_call",
     `Moment, hned se podívám.`),
 
   fillerEn: def("speech.filler_en", "Překlenovací věta při delším čekání (anglicky)",
@@ -114,7 +114,7 @@ Your answers are read aloud on the phone by a voice. Write them exactly as they 
     `One moment, let me check.`),
 
   unclearCs: def("speech.unclear_cs", "Nerozuměl jsem (česky)",
-    "Ve Vlastním řetězci, když volající mluvil, ale přepis hovoru vyšel prázdný (šum, nezřetelná řeč). Asistent řekne tuto větu a požádá o zopakování.", "during_call",
+    "Ve Vlastním řetězci, když volající mluvil, ale přepis hovoru vyšel prázdný (šum, nezřetelná řeč). Asistent řekne tuto větu a požádá o zopakování. Zatím VYPNUTO (LEA-180): věta nezazní, dokud se v enginu nezapne PIPELINE_BRIDGE_SENTENCES.", "during_call",
     `Promiňte, nerozuměl jsem. Můžete to prosím zopakovat?`),
 
   unclearEn: def("speech.unclear_en", "Nerozuměl jsem (anglicky)",
