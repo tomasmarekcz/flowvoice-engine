@@ -407,7 +407,7 @@ drive it.
 `callerSpeechStarted/Stopped`, `callerTranscribed` for Standard,
 `callerTextDelta` for Live, `toolStarted/Finished`, `disconnected`,
 `markFallback`, `inboundFrame` (line gaps and loudness, LEA-155), `finish`),
-`audioDurationMs`, `toolResultFailed`, `QualityStats` (also `first_audio_ms`,
+`audioDurationMs`, `toolResultFailed`, `QualityStats` (also, from LEA-181, the per-turn waiting times `stt_avg_ms`/`llm_avg_ms`/`voice_avg_ms`/`total_avg_ms` and maxima, measured in Pipeline from the end of the caller's speech to the first sound of the answer, plus the event `quality.turn_latency` per turn; also `first_audio_ms`,
 `inbound_gaps`, `caller_dbfs`), constants `DEAD_AIR_MS`, `SLOW_TOOL_MS`.
 
 **How it is wired:** `session.ts` and `live-session.ts` each own a tracker whose
@@ -477,7 +477,7 @@ Time is injectable for tests.
 
 ## voice/ (LEA-164/165)
 
-**What it does:** the shared "text in, speech out" layer for Hybrid and Pipeline. `sentence-chunker.ts` cuts streamed text into speakable pieces (first clause early for low latency); `speech-output.ts` queues pieces to a `VoiceProvider`, tracks what the caller has heard with `PlaybackClock`, drains before hang-up and has a stall watchdog; `realtime-voice.ts` is the provider: a second Realtime session (`gpt-realtime-2.1-mini`) that reads each sentence aloud (`voice.read` prompt), cancels on barge-in and deletes its items.
+**What it does:** the shared "text in, speech out" layer for Hybrid and Pipeline. `sentence-chunker.ts` cuts streamed text into speakable pieces (first clause early for low latency: from 12 characters, was 25, LEA-181); `speech-output.ts` queues pieces to a `VoiceProvider`, tracks what the caller has heard with `PlaybackClock`, drains before hang-up and has a stall watchdog; `realtime-voice.ts` is the provider: a second Realtime session (`gpt-realtime-2.1-mini`) that reads each sentence aloud (`voice.read` prompt), cancels on barge-in and deletes its items.
 **Depended on by:** `session.ts` (Hybrid, when constructed with `options.voice`), `pipeline-session.ts`, `session-factory.ts`.
 
 ## pipeline-session.ts, pipeline/responses-llm.ts, call-finish.ts (LEA-165)

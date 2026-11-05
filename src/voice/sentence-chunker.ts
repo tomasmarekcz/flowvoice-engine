@@ -4,7 +4,8 @@
 const ABBREVIATIONS = new Set(["tj", "tzn", "např", "atd", "apod", "mj", "tzv", "str", "č", "p", "pí", "ing", "mgr", "mudr", "judr", "bc", "prof", "dr", "resp", "cca", "min", "max"]);
 const SENTENCE_END = /[.!?…]/;
 const CLAUSE_END = /[,;:–—]/;
-const FIRST_CLAUSE_MIN = 25;
+// LEA-181: 12 characters (was 25), so the voice can start on the first short clause.
+const FIRST_CLAUSE_MIN = 12;
 const MIN_CHUNK = 8;
 
 export class SentenceChunker {

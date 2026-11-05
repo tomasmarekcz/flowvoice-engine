@@ -247,7 +247,31 @@ describe("safety", () => {
     expect(setup().tracker.finish()).toEqual({
       interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, reconnects: 0, fallback: false,
       first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
+      turns_measured: 0, stt_avg_ms: null, stt_max_ms: null, llm_avg_ms: null, llm_max_ms: null,
+      voice_avg_ms: null, voice_max_ms: null, total_avg_ms: null, total_max_ms: null,
     });
+  });
+});
+
+describe("how long the caller waits for an answer (LEA-181)", () => {
+  it("times each turn: speech recognition, model, voice, and the total", () => {
+    const { tracker, events, advance } = setup();
+    tracker.callerSpeechStopped();
+    advance(700); tracker.turnTranscribed();
+    advance(500); tracker.turnFirstText();
+    tracker.turnFirstText(); // a later word in the same turn changes nothing
+    advance(700); tracker.assistantAudio(2000);
+    tracker.assistantAudio(2000); // the next chunk is not a new turn
+    expect(events.filter((e) => e.type === "quality.turn_latency")).toEqual([
+      { type: "quality.turn_latency", payload: { stt_ms: 700, llm_ms: 500, voice_ms: 700, total_ms: 1900 } },
+    ]);
+    expect(tracker.finish()).toMatchObject({ turns_measured: 1, stt_avg_ms: 700, llm_avg_ms: 500, voice_avg_ms: 700, total_avg_ms: 1900, total_max_ms: 1900 });
+  });
+
+  it("audio that is not an answer to a caller turn (greeting, silence) is not timed", () => {
+    const { tracker } = setup();
+    tracker.assistantAudio(1000);
+    expect(tracker.finish().turns_measured).toBe(0);
   });
 });
 

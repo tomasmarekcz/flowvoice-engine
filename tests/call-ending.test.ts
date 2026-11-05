@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   CallWatchdog, containsGoodbye, endCallEnabled, maxCallMs, withTechnicalNotice,
-  SILENCE_ASK_MS, SILENCE_HANGUP_MS, LIMIT_WARNING_BEFORE_MS,
+  SILENCE_ASK_MS, SILENCE_HANGUP_MS, LIMIT_WARNING_BEFORE_MS, silenceHangupMs, LIMIT_GRACE_MS,
 } from "../src/call-ending";
 import type { AssistantSettings } from "../src/config";
 
@@ -10,6 +10,12 @@ const texts = { silenceAsk: "ASK", silenceBye: "BYE", limitWarning: "WARN", limi
 function make(maxMs = 10 * 60_000) {
   const hooks = { speak: vi.fn(), sayAndHangUp: vi.fn(), hangUp: vi.fn(), texts };
   const dog = new CallWatchdog(hooks, maxMs);
+  return { dog, hooks };
+}
+
+function makeQuiet(maxMs = 10 * 60_000, hangupMs = 30_000) {
+  const hooks = { speak: vi.fn(), sayAndHangUp: vi.fn(), hangUp: vi.fn(), texts };
+  const dog = new CallWatchdog(hooks, maxMs, { silent: { hangupMs } });
   return { dog, hooks };
 }
 
@@ -171,5 +177,89 @@ describe("helpers", () => {
     expect(empty.emailOwner).toBeNull();
     const off = withTechnicalNotice({ technical: true, ownerSms: "", emailOwner: null, ownerEnabled: false, emailEnabled: false, lang: "cs" });
     expect(off.ownerSms).toBeNull();
+  });
+});
+
+describe("quiet watchdog, used by Pipeline (LEA-181)", () => {
+  it("never asks 'still there?': a silent line ends the call without a word after the set time", () => {
+    const { dog, hooks } = makeQuiet();
+    dog.start();
+    vi.advanceTimersByTime(29_999);
+    expect(hooks.speak).not.toHaveBeenCalled();
+    expect(hooks.hangUp).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(hooks.hangUp).toHaveBeenCalledWith("silence");
+    expect(hooks.speak).not.toHaveBeenCalled();
+    expect(hooks.sayAndHangUp).not.toHaveBeenCalled();
+  });
+
+  it("does not count silence while the caller talks or the transcript is on its way", () => {
+    const { dog, hooks } = makeQuiet();
+    dog.start();
+    vi.advanceTimersByTime(25_000);
+    dog.callerSoundStarted();
+    vi.advanceTimersByTime(20_000); // a long sentence
+    expect(hooks.hangUp).not.toHaveBeenCalled();
+    dog.callerSoundStopped();
+    vi.advanceTimersByTime(5_000); // the transcript is slow
+    expect(hooks.hangUp).not.toHaveBeenCalled();
+    dog.transcriptDone();
+    vi.advanceTimersByTime(29_000);
+    expect(hooks.hangUp).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_000);
+    expect(hooks.hangUp).toHaveBeenCalledWith("silence");
+  });
+
+  it("does not hang up while an answer is being made", () => {
+    const { dog, hooks } = makeQuiet();
+    dog.start();
+    dog.responseActive(true);
+    vi.advanceTimersByTime(120_000);
+    expect(hooks.hangUp).not.toHaveBeenCalled();
+  });
+
+  it("no warning before the length limit; the caller who is talking at the limit is let finish, then the goodbye", () => {
+    const { dog, hooks } = makeQuiet(2 * 60_000, 60 * 60_000); // a long silence time, so only the limit matters here
+    dog.start();
+    dog.callerSpoke();
+    vi.advanceTimersByTime(2 * 60_000 - 5_000);
+    expect(hooks.speak).not.toHaveBeenCalled(); // no "one minute left"
+    dog.callerSoundStarted();
+    vi.advanceTimersByTime(5_000); // the limit is reached while the caller talks
+    expect(hooks.sayAndHangUp).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(3_000);
+    dog.callerSoundStopped();
+    dog.transcriptDone();
+    dog.responseActive(true);
+    vi.advanceTimersByTime(4_000); // the answer is being made
+    expect(hooks.sayAndHangUp).not.toHaveBeenCalled();
+    dog.responseActive(false);
+    vi.advanceTimersByTime(600);
+    expect(hooks.sayAndHangUp).toHaveBeenCalledWith("LIMIT", "time_limit");
+  });
+
+  it("the goodbye at the limit comes at the latest after the grace period", () => {
+    const { dog, hooks } = makeQuiet(2 * 60_000, 60 * 60_000);
+    dog.start();
+    vi.advanceTimersByTime(2 * 60_000 - 1);
+    dog.responseActive(true); // stuck
+    vi.advanceTimersByTime(1 + LIMIT_GRACE_MS + 600);
+    expect(hooks.sayAndHangUp).toHaveBeenCalledWith("LIMIT", "time_limit");
+  });
+
+  it("after a goodbye from the assistant the silent line ends the call after 6 s", () => {
+    const { dog, hooks } = makeQuiet();
+    dog.start();
+    dog.assistantSaid("Děkuji, na shledanou.");
+    dog.assistantAudio(0); // the goodbye reached the line
+    vi.advanceTimersByTime(SILENCE_ASK_MS);
+    expect(hooks.hangUp).toHaveBeenCalledWith("silence");
+  });
+
+  it("silenceHangupMs: default 30 s, clamped to 10-120 s", () => {
+    expect(silenceHangupMs(null)).toBe(30_000);
+    expect(silenceHangupMs({ silence_hangup_seconds: 45 } as AssistantSettings)).toBe(45_000);
+    expect(silenceHangupMs({ silence_hangup_seconds: 3 } as AssistantSettings)).toBe(10_000);
+    expect(silenceHangupMs({ silence_hangup_seconds: 900 } as AssistantSettings)).toBe(120_000);
   });
 });

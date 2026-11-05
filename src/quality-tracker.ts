@@ -24,6 +24,20 @@ export interface QualityStats {
   inbound_gaps: number;
   /** Average loudness of the caller's audio in dB below full scale, over the frames with sound (null: none). */
   caller_dbfs: number | null;
+  /**
+   * Pipeline only (LEA-181): how long the caller waits for an answer. For each caller turn: speech recognition (end of
+   * speech to transcript), the model (transcript to its first word) and the voice (first word to first sound on the
+   * line), and the total. Averages and maxima in ms over `turns_measured` turns; null when none was measured.
+   */
+  turns_measured: number;
+  stt_avg_ms: number | null;
+  stt_max_ms: number | null;
+  llm_avg_ms: number | null;
+  llm_max_ms: number | null;
+  voice_avg_ms: number | null;
+  voice_max_ms: number | null;
+  total_avg_ms: number | null;
+  total_max_ms: number | null;
 }
 
 export type QualityEmit = (eventType: string, payload: Record<string, unknown>) => void;
@@ -55,7 +69,12 @@ export class CallQualityTracker {
   private stats: QualityStats = {
     interruptions: 0, false_triggers: 0, dead_air_count: 0, dead_air_ms: 0, tool_problems: 0, disconnects: 0, reconnects: 0, fallback: false,
     first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
+    turns_measured: 0, stt_avg_ms: null, stt_max_ms: null, llm_avg_ms: null, llm_max_ms: null,
+    voice_avg_ms: null, voice_max_ms: null, total_avg_ms: null, total_max_ms: null,
   };
+  // The turn being timed (Pipeline): when the caller's speech stopped, the transcript came, the model's first word came.
+  private turn: { stopAt: number; sttAt?: number; llmAt?: number } | null = null;
+  private lat = { stt: [] as number[], llm: [] as number[], voice: [] as number[], total: [] as number[] };
   private readonly startedAt: number;
   private lastInboundTimestamp: number | null = null;
   private levelSum = 0;
@@ -79,6 +98,7 @@ export class CallQualityTracker {
       const t = this.now();
       if (this.stats.first_audio_ms === null) this.stats.first_audio_ms = t - this.startedAt;
       this.closeGap(t);
+      this.completeTurn(t);
       this.playbackEndsAt = Math.max(t, this.playbackEndsAt) + durationMs;
       this.lastActivityAt = this.playbackEndsAt;
     });
@@ -121,7 +141,31 @@ export class CallQualityTracker {
 
   /** Standard: speech detection says the caller stopped talking. */
   callerSpeechStopped(): void {
-    this.safely(() => { this.lastActivityAt = this.now(); });
+    this.safely(() => {
+      this.lastActivityAt = this.now();
+      this.turn = { stopAt: this.now() }; // Pipeline timing starts here
+    });
+  }
+
+  /** Pipeline: the transcript of the caller's words arrived. */
+  turnTranscribed(): void {
+    this.safely(() => { if (this.turn && this.turn.sttAt === undefined) this.turn.sttAt = this.now(); });
+  }
+
+  /** Pipeline: the model produced the first word of its answer (later calls in the same turn are ignored). */
+  turnFirstText(): void {
+    this.safely(() => { if (this.turn && this.turn.sttAt !== undefined && this.turn.llmAt === undefined) this.turn.llmAt = this.now(); });
+  }
+
+  // The first sound of the answer reached the line: the turn is complete.
+  private completeTurn(t: number): void {
+    const turn = this.turn;
+    if (!turn || turn.sttAt === undefined || turn.llmAt === undefined) return;
+    this.turn = null;
+    const stt = turn.sttAt - turn.stopAt, llm = turn.llmAt - turn.sttAt, voice = t - turn.llmAt, total = t - turn.stopAt;
+    if (total < 0 || total > 120_000) return;
+    this.lat.stt.push(stt); this.lat.llm.push(llm); this.lat.voice.push(voice); this.lat.total.push(total);
+    this.emit("quality.turn_latency", { stt_ms: Math.round(stt), llm_ms: Math.round(llm), voice_ms: Math.round(voice), total_ms: Math.round(total) });
   }
 
   /** Standard: the transcript of one speech segment arrived (empty text = nothing was said). */
@@ -209,9 +253,16 @@ export class CallQualityTracker {
       this.finished = true;
       this.closeGap(this.now());
     });
+    const avg = (a: number[]) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null);
+    const max = (a: number[]) => (a.length ? Math.round(Math.max(...a)) : null);
     return {
       ...this.stats,
       caller_dbfs: this.levelCount > 0 ? Math.round(this.levelSum / this.levelCount) : null,
+      turns_measured: this.lat.total.length,
+      stt_avg_ms: avg(this.lat.stt), stt_max_ms: max(this.lat.stt),
+      llm_avg_ms: avg(this.lat.llm), llm_max_ms: max(this.lat.llm),
+      voice_avg_ms: avg(this.lat.voice), voice_max_ms: max(this.lat.voice),
+      total_avg_ms: avg(this.lat.total), total_max_ms: max(this.lat.total),
     };
   }
 

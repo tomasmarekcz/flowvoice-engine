@@ -278,6 +278,32 @@ describe("PipelineCallSession", () => {
     });
   });
 
+  describe("quiet silence handling (LEA-181)", () => {
+    it("never asks 'still there?': the silent line ends the call after 30 s without a word", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const { session, voice, sent, checks } = setup({ script: [] });
+      await session.start();
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(sent.marks).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(voice.spoken).toEqual([]);
+      expect(checks).toEqual([]);
+      expect(sent.marks).toHaveLength(1); // the line closes once the (empty) queue has played
+      session.handleTwilioMark(sent.marks[0]);
+      expect(sent.endCall).toBe(1);
+    });
+
+    it("a caller who talks keeps the line open however long the sentence is", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const { session, sockets, sent } = setup({ script: [] });
+      await session.start();
+      await vi.advanceTimersByTimeAsync(20_000);
+      sockets[0].say({ type: "input_audio_buffer.speech_started" });
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(sent.marks).toHaveLength(0);
+    });
+  });
+
   describe("speech not understood (switched on with PIPELINE_BRIDGE_SENTENCES, off by default, LEA-180)", () => {
     beforeEach(() => { process.env.PIPELINE_BRIDGE_SENTENCES = "on"; });
     afterEach(() => { delete process.env.PIPELINE_BRIDGE_SENTENCES; });

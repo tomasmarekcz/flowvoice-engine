@@ -33,6 +33,8 @@ export interface AssistantSettings {
   knowledge_top_n: number | null;
   // Longest call in minutes (LEA-160); missing = 10.
   max_call_minutes?: number | null;
+  /** Pipeline: seconds of silence after which the call ends without a word (LEA-181). */
+  silence_hangup_seconds?: number | null;
   _owner_email?: string | null;
   // Joined from projects table
   _project_name?: string | null;

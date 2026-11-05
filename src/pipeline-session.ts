@@ -24,7 +24,7 @@ import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { responsesLlm, type LlmStream } from "./pipeline/responses-llm";
 import { finishCall } from "./call-finish";
-import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, endCallEnabled, speaksEnglish, type EndReason } from "./call-ending";
+import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, silenceHangupMs, endCallEnabled, speaksEnglish, type EndReason } from "./call-ending";
 
 const STT_START_TIMEOUT_MS = 6000;
 // A tool that takes longer than this gets a short "one moment" sentence so the caller does not sit in silence.
@@ -162,7 +162,9 @@ export class PipelineCallSession implements VoiceSession {
       sayAndHangUp: (text, reason) => this.sayAndHangUp(text, reason),
       hangUp: (reason) => { this.endReason = reason; void this.hangUp(this.turnId, false); },
       texts: fixedTexts(settings, promptSnapshot),
-    }, settings ? maxCallMs(settings) : 24 * 60 * 60_000); // a test call has the same time limit as a real call (LEA-174); only a call without a project is unlimited
+    }, settings ? maxCallMs(settings) : 24 * 60 * 60_000, // a test call has the same time limit as a real call (LEA-174); only a call without a project is unlimited
+    // LEA-181: no spoken questions about silence, no length warning; the silent line ends the call after the customer's time.
+    { silent: { hangupMs: silenceHangupMs(settings) } });
     this.watchdog.start();
   }
 
@@ -224,22 +226,27 @@ export class PipelineCallSession implements VoiceSession {
     if (type === "error") { logger.error("speech recognition error event", { event: "stt.error_event", detail: JSON.stringify(msg).slice(0, 400) }); return; }
     if (type === "input_audio_buffer.speech_started") {
       this.quality.callerSpeechStarted();
+      this.watchdog?.callerSoundStarted();
       this.speechStartedAt = Date.now();
       if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
       this.bargeInTimer = setTimeout(() => this.onVerifiedCallerSpeech(true), BARGE_IN_CONFIRM_MS);
     } else if (type === "input_audio_buffer.speech_stopped") {
       this.quality.callerSpeechStopped();
+      this.watchdog?.callerSoundStopped();
       if (this.bargeInTimer) { clearTimeout(this.bargeInTimer); this.bargeInTimer = null; }
       this.lastSpeechMs = this.speechStartedAt ? Date.now() - this.speechStartedAt : 0;
     } else if (type === "conversation.item.input_audio_transcription.completed") {
       const text = String(msg["transcript"] ?? "");
       this.quality.callerTranscribed(text);
+      if (text.trim()) this.quality.turnTranscribed();
+      this.watchdog?.transcriptDone();
       this.logger.handleOpenAIEvent(msg);
       if (this.ended) return;
       if (text.trim()) { this.unclearInRow = 0; this.onVerifiedCallerSpeech(false); this.startTurn(text.trim()); }
       else this.onUnclearSpeech();
     } else if (type === "conversation.item.input_audio_transcription.failed") {
       logger.warn("transcription of an utterance failed", { event: "stt.transcription_failed", detail: JSON.stringify(msg).slice(0, 300) });
+      this.watchdog?.transcriptDone();
       if (!this.ended) this.onUnclearSpeech();
     }
   }
@@ -378,7 +385,7 @@ export class PipelineCallSession implements VoiceSession {
         });
         for await (const event of stream) {
           if (turn !== this.turnId) return;
-          if (event.type === "text") { text += event.delta; spoke = true; this.speech?.pushText(event.delta); }
+          if (event.type === "text") { text += event.delta; spoke = true; this.quality.turnFirstText(); this.speech?.pushText(event.delta); }
           else if (event.type === "tool_call") calls.push(event);
           else if (event.type === "usage") { this.usage.llmInput += event.inputTokens; this.usage.llmCachedInput += event.cachedInputTokens; this.usage.llmOutput += event.outputTokens; }
         }
