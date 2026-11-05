@@ -19,7 +19,7 @@ import { CallQualityTracker, toolResultFailed } from "./quality-tracker";
 import { PlaybackClock } from "./playback-clock";
 import { InputBuffer } from "./input-buffer";
 import { effectiveLanguage, resolveVoice } from "./persona";
-import { pipelineLlmEffort, pipelineLlmModel, pipelineSttModel, voiceModel } from "./models";
+import { pipelineBridgeSentences, pipelineLlmEffort, pipelineLlmModel, pipelineSttModel, voiceModel } from "./models";
 import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { responsesLlm, type LlmStream } from "./pipeline/responses-llm";
@@ -34,8 +34,9 @@ const MAX_TOOL_ROUNDS = 6;
 const UNCLEAR_MIN_SPEECH_MS = 700;
 // After this many "I didn't catch that" in a row the assistant stops asking and waits.
 const MAX_UNCLEAR_IN_ROW = 2;
-// Sound counts as the caller speaking (and cuts the assistant off) only after it lasts this long or is transcribed into words:
-// a click, a cough or the assistant's own voice coming back through the line must not stop the assistant mid-sentence.
+// Sound cuts the assistant off only after it has lasted this long without a break. Words in the transcript never cut it by
+// themselves (LEA-179): speech recognition writes "uh", "um" or a stray character for a click, a cough or the assistant's own
+// voice coming back through the line, and each of those used to stop the assistant mid-sentence.
 // (LEA-175: one second; was half a second.)
 const BARGE_IN_CONFIRM_MS = 1000;
 // An answer this short is finished in under a second: the caller waiting for it is better than cutting it off (LEA-175).
@@ -225,7 +226,7 @@ export class PipelineCallSession implements VoiceSession {
       this.quality.callerSpeechStarted();
       this.speechStartedAt = Date.now();
       if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
-      this.bargeInTimer = setTimeout(() => this.onVerifiedCallerSpeech(), BARGE_IN_CONFIRM_MS);
+      this.bargeInTimer = setTimeout(() => this.onVerifiedCallerSpeech(true), BARGE_IN_CONFIRM_MS);
     } else if (type === "input_audio_buffer.speech_stopped") {
       this.quality.callerSpeechStopped();
       if (this.bargeInTimer) { clearTimeout(this.bargeInTimer); this.bargeInTimer = null; }
@@ -235,7 +236,7 @@ export class PipelineCallSession implements VoiceSession {
       this.quality.callerTranscribed(text);
       this.logger.handleOpenAIEvent(msg);
       if (this.ended) return;
-      if (text.trim()) { this.unclearInRow = 0; this.onVerifiedCallerSpeech(); this.startTurn(text.trim()); }
+      if (text.trim()) { this.unclearInRow = 0; this.onVerifiedCallerSpeech(false); this.startTurn(text.trim()); }
       else this.onUnclearSpeech();
     } else if (type === "conversation.item.input_audio_transcription.failed") {
       logger.warn("transcription of an utterance failed", { event: "stt.transcription_failed", detail: JSON.stringify(msg).slice(0, 300) });
@@ -243,15 +244,16 @@ export class PipelineCallSession implements VoiceSession {
     }
   }
 
-  // The caller really speaks (the sound lasted long enough, or it was transcribed into words): the line is not silent,
-  // a goodbye in progress can be taken back, and speech that is playing or being produced is cut. A turn that is still
-  // thinking is replaced when the new words are recognised.
-  private onVerifiedCallerSpeech(): void {
+  // The caller really speaks (the sound lasted long enough, or it was transcribed into words): the line is not silent
+  // and a goodbye in progress can be taken back. Only `cut` (the sound lasted a full second) also stops speech that is
+  // playing or being produced; words alone never do (LEA-179). A turn that is still thinking is replaced when the new
+  // words are recognised.
+  private onVerifiedCallerSpeech(cut: boolean): void {
     if (this.bargeInTimer) { clearTimeout(this.bargeInTimer); this.bargeInTimer = null; }
     if (this.ended) return;
     this.watchdog?.callerSpoke();
     this.cancelHangupIfCallerSpeaks();
-    if ((this.clock.audible() || this.speech?.busy) && !this.answerIsShort()) this.bargeIn();
+    if (cut && (this.clock.audible() || this.speech?.busy) && !this.answerIsShort()) this.bargeIn();
   }
 
   // The answer being spoken has only a few words: let it finish.
@@ -263,6 +265,7 @@ export class PipelineCallSession implements VoiceSession {
 
   // The caller talked for a while but nothing could be made of it: ask once more instead of staying silent.
   private onUnclearSpeech(): void {
+    if (!pipelineBridgeSentences()) return; // LEA-180: off by default
     if (this.givingUp || this.turnActive || !this.speech || this.speech.busy || this.clock.audible()) return;
     if (this.lastSpeechMs < UNCLEAR_MIN_SPEECH_MS || this.unclearInRow >= MAX_UNCLEAR_IN_ROW) return;
     this.unclearInRow++;
@@ -461,7 +464,7 @@ export class PipelineCallSession implements VoiceSession {
     this.quality.toolStarted();
     this.watchdog?.toolStarted();
     const t0 = Date.now();
-    const filler = setTimeout(() => {
+    const filler = !pipelineBridgeSentences() ? null : setTimeout(() => {
       if (turn === this.turnId && this.speech && !this.speech.busy && !this.clock.audible()) {
         this.speech.say(this.promptSnapshot.text(effectiveLanguage(this.settings) === "en" ? P.fillerEn : P.fillerCs));
       }
@@ -472,7 +475,7 @@ export class PipelineCallSession implements VoiceSession {
       result = out.result;
       this.embeddingTokens += out.embeddingTokens;
     } finally {
-      clearTimeout(filler);
+      if (filler) clearTimeout(filler);
       this.watchdog?.toolFinished();
     }
     this.quality.toolFinished(call.name, Date.now() - t0, toolResultFailed(result));

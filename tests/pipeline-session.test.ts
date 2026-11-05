@@ -191,6 +191,7 @@ describe("PipelineCallSession", () => {
     sockets[0].say(transcribed("První otázka"));
     await flush();
     sockets[0].say({ type: "input_audio_buffer.speech_started" });
+    await flush(1100); // the caller keeps talking for a full second: that cuts the answer
     sockets[0].say(transcribed("Počkejte, druhá otázka"));
     await flush();
     const input = requests[1].input as Array<{ role?: string; content?: string }>;
@@ -240,7 +241,7 @@ describe("PipelineCallSession", () => {
       expect(callbacks.clearAudio).not.toHaveBeenCalled();
     });
 
-    it("cuts the assistant for a short word that is transcribed", async () => {
+    it("does not cut the assistant for words that are only in the transcript (\"uh\", \"um\"), LEA-179", async () => {
       const { session, sockets, callbacks } = setup({ script: [[{ type: "text", delta: "Dobrý den, tohle je dlouhá odpověď." }], [{ type: "text", delta: "Ano." }]], autoFinishVoice: false });
       await session.start();
       sockets[0].say(transcribed("Otázka"));
@@ -248,9 +249,9 @@ describe("PipelineCallSession", () => {
       sockets[0].say({ type: "input_audio_buffer.speech_started" });
       await flush(100);
       sockets[0].say({ type: "input_audio_buffer.speech_stopped" });
-      sockets[0].say(transcribed("Ne"));
+      sockets[0].say(transcribed("Uh"));
       await flush();
-      expect(callbacks.clearAudio).toHaveBeenCalledTimes(1);
+      expect(callbacks.clearAudio).not.toHaveBeenCalled();
     });
   });
 
@@ -277,7 +278,10 @@ describe("PipelineCallSession", () => {
     });
   });
 
-  describe("speech not understood", () => {
+  describe("speech not understood (switched on with PIPELINE_BRIDGE_SENTENCES, off by default, LEA-180)", () => {
+    beforeEach(() => { process.env.PIPELINE_BRIDGE_SENTENCES = "on"; });
+    afterEach(() => { delete process.env.PIPELINE_BRIDGE_SENTENCES; });
+
     const talk = (s: FakeSocket, ms: number, now: { t: number }) => {
       s.say({ type: "input_audio_buffer.speech_started" });
       now.t += ms;
@@ -308,6 +312,23 @@ describe("PipelineCallSession", () => {
       for (let i = 0; i < 4; i++) { talk(sockets[0], 1500, now); await flush(); }
       const said = voice.spoken.join(" ");
       expect(said.match(/didn't catch/g)).toHaveLength(2);
+      vi.restoreAllMocks();
+    });
+  });
+
+  describe("fixed mid-call sentences are off by default (LEA-180)", () => {
+    it("says nothing after real speech with an empty transcript", async () => {
+      const now = { t: 1_000_000 };
+      vi.spyOn(Date, "now").mockImplementation(() => now.t);
+      const { session, sockets, voice, requests } = setup({ script: [] });
+      await session.start();
+      sockets[0].say({ type: "input_audio_buffer.speech_started" });
+      now.t += 1500;
+      sockets[0].say({ type: "input_audio_buffer.speech_stopped" });
+      sockets[0].say(transcribed("  "));
+      await flush();
+      expect(voice.spoken).toEqual([]);
+      expect(requests).toHaveLength(0);
       vi.restoreAllMocks();
     });
   });

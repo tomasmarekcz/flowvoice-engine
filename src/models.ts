@@ -13,6 +13,13 @@ export const voiceModel = (): string => process.env.VOICE_MODEL || "gpt-realtime
 /** Pipeline engine: the text model that thinks (Responses API) and how much it reasons before answering. */
 export const pipelineLlmModel = (): string => process.env.PIPELINE_LLM_MODEL || "gpt-6-luna";
 export const pipelineLlmEffort = (): string => process.env.PIPELINE_LLM_EFFORT ?? "low";
+/**
+ * Pipeline engine: the two fixed sentences the engine itself says in the middle of a call ("one moment, let me check"
+ * while a tool is slow, and "sorry, I didn't catch that" after speech that could not be read). Off by default
+ * (LEA-180): the owner wants to hear the assistant without them. Set PIPELINE_BRIDGE_SENTENCES=on to bring them back.
+ * The recorded fallback sentences for a lost connection are not affected.
+ */
+export const pipelineBridgeSentences = (): boolean => process.env.PIPELINE_BRIDGE_SENTENCES === "on";
 
 /** Pipeline engine: speech recognition. */
 export const pipelineSttModel = (): string => process.env.PIPELINE_STT_MODEL || "gpt-4o-transcribe";
