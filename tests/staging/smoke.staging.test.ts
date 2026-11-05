@@ -104,11 +104,18 @@ describe.skipIf(!configured)("staging smoke scenarios", () => {
     // With a service the booking works, and the server decides its status (LEA-132). Only when the smoke project has one.
     const services = (await (await fetch(`${cfg.base}/api/services?project_id=${cfg.projectId}`, { headers: h })).json()) as Array<{ id: string }>;
     if (Array.isArray(services) && services.length > 0) {
-      const event = await fetch(`${cfg.base}/api/calendar/events?project_id=${cfg.projectId}`, {
-        method: "POST", headers: h, body: JSON.stringify({ ...booking, service_id: services[0].id }),
-      });
-      expect(event.ok).toBe(true);
-      expect(["pending_review", "confirmed"]).toContain(((await event.json()) as { status: string }).status);
+      // The staging calendar holds real test bookings: when the first time is taken (409), try the next hour, up to six.
+      let event: Response | null = null;
+      for (let hour = 0; hour < 6; hour++) {
+        const from = new Date(start.getTime() + hour * 3600 * 1000);
+        event = await fetch(`${cfg.base}/api/calendar/events?project_id=${cfg.projectId}`, {
+          method: "POST", headers: h,
+          body: JSON.stringify({ ...booking, start_time: from.toISOString(), end_time: new Date(from.getTime() + 3600 * 1000).toISOString(), service_id: services[0].id }),
+        });
+        if (event.status !== 409) break;
+      }
+      expect(event?.ok).toBe(true);
+      expect(["pending_review", "confirmed"]).toContain(((await event!.json()) as { status: string }).status);
     }
   });
 
