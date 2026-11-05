@@ -17,7 +17,8 @@ import type { AudioFormat, SessionCallbacks, VoiceSession } from "./session-type
 import { CallQualityTracker, audioDurationMs, toolResultFailed } from "./quality-tracker";
 import { PlaybackClock } from "./playback-clock";
 import { resolveVoice } from "./persona";
-import { standardModel, voiceModel } from "./models";
+import { elevenLabsModel, standardModel, voiceModel } from "./models";
+import { isElevenVoice } from "./voice/eleven-voices";
 import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { InputBuffer } from "./input-buffer";
@@ -432,8 +433,8 @@ export class CallSession implements VoiceSession {
     return {
       engine: "hybrid",
       brain_model: model,
-      voice_provider: "openai-realtime",
-      voice_model: voiceModel(),
+      voice_provider: isElevenVoice(resolveVoice(this.settings)) ? "elevenlabs" : "openai-realtime",
+      voice_model: isElevenVoice(resolveVoice(this.settings)) ? elevenLabsModel() : voiceModel(),
       voice_audio_output_tokens: this.voiceUsage.audioOutputTokens,
       voice_text_input_tokens: this.voiceUsage.textInputTokens,
       voice_characters: this.voiceUsage.characters,

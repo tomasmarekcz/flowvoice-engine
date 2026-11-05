@@ -6,7 +6,7 @@ import { logger } from "./logger";
 import { getSnapshot } from "./prompts/store";
 import { CallSession } from "./session";
 import { PipelineCallSession } from "./pipeline-session";
-import { RealtimeVoice } from "./voice/realtime-voice";
+import { makeVoice } from "./voice/make-voice";
 import { hybridBrainModel } from "./models";
 import type { SessionCallbacks, VoiceSession } from "./session-types";
 
@@ -101,7 +101,7 @@ async function createSession(
     // The Realtime model listens and thinks (answering in text); a separate Realtime session is the voice.
     const hybrid = new CallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot, {
       audio, model: hybridBrainModel(),
-      voice: (voiceName, snapshot) => new RealtimeVoice({ voice: voiceName, snapshot }),
+      voice: (voiceName, snapshot) => makeVoice(voiceName, snapshot, settings),
     });
     try {
       await hybrid.start();
@@ -114,7 +114,7 @@ async function createSession(
   } else if (engine === "pipeline") {
     const pipeline = new PipelineCallSession(projectId, callerPhone, twilioCallSid, callbacks, settings, promptSnapshot, {
       audio,
-      voice: (voiceName, snapshot) => new RealtimeVoice({ voice: voiceName, snapshot }),
+      voice: (voiceName, snapshot) => makeVoice(voiceName, snapshot, settings),
     });
     try {
       await pipeline.start();

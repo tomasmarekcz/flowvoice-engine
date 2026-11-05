@@ -19,7 +19,8 @@ import { CallQualityTracker, toolResultFailed } from "./quality-tracker";
 import { PlaybackClock } from "./playback-clock";
 import { InputBuffer } from "./input-buffer";
 import { effectiveLanguage, resolveVoice } from "./persona";
-import { pipelineBridgeSentences, pipelineLlmEffort, pipelineLlmModel, pipelineSttModel, voiceModel } from "./models";
+import { elevenLabsModel, pipelineBridgeSentences, pipelineLlmEffort, pipelineLlmModel, pipelineSttModel, voiceModel } from "./models";
+import { isElevenVoice } from "./voice/eleven-voices";
 import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { responsesLlm, type LlmStream } from "./pipeline/responses-llm";
@@ -671,8 +672,8 @@ export class PipelineCallSession implements VoiceSession {
       llm_input_tokens: this.usage.llmInput,
       llm_cached_input_tokens: this.usage.llmCachedInput,
       llm_output_tokens: this.usage.llmOutput,
-      voice_provider: "openai-realtime",
-      voice_model: voiceModel(),
+      voice_provider: isElevenVoice(resolveVoice(this.settings)) ? "elevenlabs" : "openai-realtime",
+      voice_model: isElevenVoice(resolveVoice(this.settings)) ? elevenLabsModel() : voiceModel(),
       voice_audio_output_tokens: this.usage.voiceAudioOut,
       voice_text_input_tokens: this.usage.voiceTextIn,
       voice_characters: this.usage.voiceChars,

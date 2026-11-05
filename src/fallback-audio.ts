@@ -4,13 +4,21 @@
 // RULE: a new voice (VOICE_GENDER in persona.ts) or a changed sentence means running that script again;
 // tests/fallback-audio.test.ts fails until every voice has all its recordings.
 import { FALLBACK_CLIPS } from "./fallback-audio-data";
-import { DEFAULT_VOICE_BY_GENDER } from "./persona";
+import { DEFAULT_VOICE_BY_GENDER, VOICE_GENDER } from "./persona";
 
 export type ClipKind = "wait" | "apology";
 
+/**
+ * ElevenLabs voices whose sentences are NOT recorded yet (LEA-166): the ElevenLabs account must be on a paid plan before the
+ * script can record a library voice. Until then these voices play the default OpenAI voice of the same gender when the
+ * connection is lost. REMOVE a name here when `npm run fallback-audio` has recorded it; the test insists on that.
+ * MUST BE EMPTY before the engine goes to production with these voices (see docs/features/call-ending.md).
+ */
+export const VOICES_WITHOUT_CLIPS_YET: string[] = ["el-adam", "el-jarnathan", "el-hope", "el-jana"];
+
 /** The recorded sentence in this voice and language, or null when there is none (a browser test call has no phone format). */
 export function fallbackClip(kind: ClipKind, language: "cs" | "en", voice: string): string | null {
-  const clips = FALLBACK_CLIPS[voice] ?? FALLBACK_CLIPS[DEFAULT_VOICE_BY_GENDER.female];
+  const clips = FALLBACK_CLIPS[voice] ?? FALLBACK_CLIPS[DEFAULT_VOICE_BY_GENDER[VOICE_GENDER[voice] ?? "female"]];
   const clip = clips?.[language]?.[kind] ?? "";
   return clip ? clip : null;
 }

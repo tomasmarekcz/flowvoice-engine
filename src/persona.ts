@@ -2,6 +2,7 @@
 // put at the start of the instructions of every voice engine, so the grammar ("jsem ráda" / "jsem rád") never switches
 // mid-call, and the voice is chosen to match the gender.
 import type { AssistantSettings } from "./config";
+import { ELEVEN_VOICES } from "./voice/eleven-voices";
 import type { PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P } from "./prompts/registry";
 
@@ -33,6 +34,8 @@ export function personaBlock(settings: AssistantSettings | null, snapshot: Promp
 export const VOICE_GENDER: Record<string, Gender> = {
   alloy: "female", ash: "male", ballad: "female", cedar: "male", coral: "female",
   echo: "male", marin: "female", sage: "female", shimmer: "female", verse: "male",
+  // ElevenLabs voices (Hybrid and Pipeline only, LEA-166); the list with their ids is voice/eleven-voices.ts.
+  ...Object.fromEntries(Object.entries(ELEVEN_VOICES).map(([name, v]) => [name, v.gender])),
 };
 export const DEFAULT_VOICE_BY_GENDER: Record<Gender, string> = { female: "marin", male: "cedar" };
 

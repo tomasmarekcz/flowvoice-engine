@@ -22,4 +22,7 @@ export const pipelineLlmEffort = (): string => process.env.PIPELINE_LLM_EFFORT ?
 export const pipelineBridgeSentences = (): boolean => process.env.PIPELINE_BRIDGE_SENTENCES === "on";
 
 /** Pipeline engine: speech recognition. */
+/** ElevenLabs voice model (LEA-166): Eleven v4 Turbo, fast and speaks Czech. */
+export const elevenLabsModel = (): string => process.env.ELEVENLABS_MODEL || "eleven_v4_turbo";
+
 export const pipelineSttModel = (): string => process.env.PIPELINE_STT_MODEL || "gpt-4o-transcribe";
