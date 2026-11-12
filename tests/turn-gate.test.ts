@@ -149,12 +149,12 @@ describe("TurnGate", () => {
     expect(t.sent[0].info.kind).toBe("long-complete");
   });
 
-  it("measures the sound from the audio times of the events, minus the silence the detector waits for", () => {
+  it("measures the sound from the audio times of the events, minus the detector's padding before and its silence after", () => {
     t.gate.speechStarted();
-    t.clock.t += 5000; // the wall clock would say 5 s, the audio says 1.9 s of sound + 0.4 s silence
+    t.clock.t += 5000; // the wall clock would say 5 s; the audio says 1.6 s of sound + 0.3 s before + 0.4 s after
     t.gate.speechStopped({ startMs: 10_000, endMs: 12_300 });
     const heard = t.gate.transcript("Ano, prosím.");
-    expect(heard.soundMs).toBe(1900);
+    expect(heard.soundMs).toBe(1600);
   });
 
   it("forgets a transcript that never arrives, so the next one is not mixed up with it", () => {

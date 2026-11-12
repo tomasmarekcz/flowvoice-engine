@@ -202,10 +202,10 @@ describe("PipelineCallSession", () => {
 
   describe("when what the caller says goes to the model (LEA-196)", () => {
     const slow = { completeMs: 40, fragmentMs: 80, shortMs: 500, pollMs: 2 };
-    /** The caller talks for `soundMs` of sound (the event times include 400 ms of detector silence), then the transcript arrives. */
+    /** The caller talks for `soundMs` of sound (the event times include 300 ms of detector padding before and 400 ms of silence after), then the transcript arrives. */
     const speak = (s: FakeSocket, text: string, soundMs: number, extra: Record<string, unknown> = {}) => {
       s.say({ type: "input_audio_buffer.speech_started", audio_start_ms: 0 });
-      s.say({ type: "input_audio_buffer.speech_stopped", audio_end_ms: soundMs + 400 });
+      s.say({ type: "input_audio_buffer.speech_stopped", audio_end_ms: soundMs + 700 });
       s.say({ ...transcribed(text), ...extra });
     };
 

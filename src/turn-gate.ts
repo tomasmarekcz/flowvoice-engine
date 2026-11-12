@@ -27,6 +27,8 @@ export interface TurnTiming {
   longSoundMs: number;
   /** Silence the speech detector waits for before it says "speech stopped"; it is part of the reported length. */
   vadSilenceMs: number;
+  /** Audio the detector adds before the speech it found (prefix padding); the reported audio start already includes it. */
+  vadPrefixMs: number;
   /** How often the gate looks at the clock. */
   pollMs: number;
   /** A transcript that has not arrived this long after the speech stopped is given up. */
@@ -39,6 +41,7 @@ export const TURN_TIMING: TurnTiming = {
   shortMs: 3000,
   longSoundMs: 1000,
   vadSilenceMs: 400,
+  vadPrefixMs: 300,
   pollMs: 100,
   transcriptTimeoutMs: 6000,
 };
@@ -105,10 +108,12 @@ export class TurnGate {
     const now = this.now();
     this.dropStaleUtterances(now);
     const wall = now - (this.speaking ? this.startedAt : now);
-    const span = audio && typeof audio.startMs === "number" && typeof audio.endMs === "number" && audio.endMs >= audio.startMs
-      ? audio.endMs - audio.startMs
-      : wall;
-    this.utterances.push({ soundMs: Math.max(0, span - this.timing.vadSilenceMs), overlap: this.speaking && this.startedBusy });
+    // The audio times include the detector's padding on both sides; the wall clock only the silence at the end.
+    const fromAudio = audio && typeof audio.startMs === "number" && typeof audio.endMs === "number" && audio.endMs >= audio.startMs;
+    const soundMs = fromAudio
+      ? audio.endMs! - audio.startMs! - this.timing.vadSilenceMs - this.timing.vadPrefixMs
+      : wall - this.timing.vadSilenceMs;
+    this.utterances.push({ soundMs: Math.max(0, soundMs), overlap: this.speaking && this.startedBusy });
     this.speaking = false;
     this.lastStopAt = now;
     this.quietSince = now;
