@@ -11,9 +11,9 @@ on:
         type: boolean
         default: false
       wait_minutes:
-        description: "If a call or other action is running: wait up to this many minutes (checks every minute). 0 = do not deploy, stop."
+        description: "If a call or other action is running: wait up to this many minutes (checks every minute). default 15; 0 = do not wait, stop at once."
         required: false
-        default: "0"
+        default: "15"
       force:
         description: "Deploy even while a call is running (only when production is already broken)"
         type: boolean
