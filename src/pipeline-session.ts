@@ -19,7 +19,9 @@ import { CallQualityTracker, toolResultFailed } from "./quality-tracker";
 import { PlaybackClock } from "./playback-clock";
 import { InputBuffer } from "./input-buffer";
 import { effectiveLanguage, resolveVoice } from "./persona";
-import { elevenLabsModel, pipelineBridgeSentences, pipelineLlmEffort, pipelineLlmModel, pipelineSttModel, voiceModel } from "./models";
+import { elevenLabsModel, pipelineBridgeSentences, pipelineConfidenceLimits, pipelineConfidenceMode, pipelineLlmEffort, pipelineLlmModel, pipelineSttModel, voiceModel } from "./models";
+import { TurnGate, TURN_TIMING, type TurnTiming } from "./turn-gate";
+import { analyzeLogprobs, isLowConfidence } from "./transcript-confidence";
 import { isElevenVoice } from "./voice/eleven-voices";
 import { SpeechOutput } from "./voice/speech-output";
 import type { VoiceProvider, VoiceUsage } from "./voice/types";
@@ -35,13 +37,9 @@ const MAX_TOOL_ROUNDS = 6;
 const UNCLEAR_MIN_SPEECH_MS = 700;
 // After this many "I didn't catch that" in a row the assistant stops asking and waits.
 const MAX_UNCLEAR_IN_ROW = 2;
-// Sound cuts the assistant off only after it has lasted this long without a break. Words in the transcript never cut it by
-// themselves (LEA-179): speech recognition writes "uh", "um" or a stray character for a click, a cough or the assistant's own
-// voice coming back through the line, and each of those used to stop the assistant mid-sentence.
-// (LEA-175: one second; was half a second.)
-const BARGE_IN_CONFIRM_MS = 1000;
-// An answer this short is finished in under a second: the caller waiting for it is better than cutting it off (LEA-175).
-const NO_BARGE_IN_WORDS = 5;
+// The caller's sound counts as "the caller really speaks" (the silence timer, taking back a goodbye) after this long without
+// a break. The assistant is never cut off by the caller (LEA-196); what the caller says is collected by the TurnGate.
+const CALLER_SOUND_CONFIRM_MS = 1000;
 
 export interface PipelineOptions {
   /** Audio format of the caller's side: "pcmu" (phone line, default on Twilio) or PCM 24 kHz (browser test call). */
@@ -51,6 +49,8 @@ export interface PipelineOptions {
   voice: (voiceName: string, snapshot: PromptSnapshot) => VoiceProvider;
   /** Test hook: replaces the Responses API. */
   llm?: LlmStream;
+  /** Test hook: waiting times of the turn gate (LEA-196). */
+  timing?: Partial<TurnTiming>;
   /** Test hook: replaces the WebSocket to OpenAI for speech recognition. */
   connect?: (url: string, apiKey: string) => WebSocket;
 }
@@ -96,7 +96,9 @@ export class PipelineCallSession implements VoiceSession {
   private givingUp = false;
   private apiKey = "";
   private speechStartedAt = 0;
-  private bargeInTimer: NodeJS.Timeout | null = null;
+  private soundTimer: NodeJS.Timeout | null = null;
+  private audioStartMs: number | undefined;
+  private readonly gate: TurnGate;
   private lastSpeechMs = 0;
   private unclearInRow = 0;
   private usage = {
@@ -117,6 +119,15 @@ export class PipelineCallSession implements VoiceSession {
     this.audioFormat = options.audio === "pcm24" ? "pcm24" : "mulaw8";
     this.logger = new CallLogger(projectId, twilioCallSid);
     this.llm = options.llm ?? responsesLlm;
+    // LEA-196: what the caller says goes to the model as one turn, only when it is quiet (see turn-gate.ts).
+    this.gate = new TurnGate({
+      send: (text, info) => {
+        this.logger.logEvent("turn.sent", "system", { text, kind: info.kind, pieces: info.pieces, sound_ms: Number.isFinite(info.soundMs) ? info.soundMs : null, waited_ms: info.waitedMs });
+        this.unclearInRow = 0;
+        if (!this.ended) this.startTurn(text);
+      },
+      assistantBusy: () => this.turnActive || (this.speech?.busy ?? false) || this.clock.audible(),
+    }, { ...TURN_TIMING, ...options.timing });
   }
 
   async start(): Promise<void> {
@@ -184,6 +195,8 @@ export class PipelineCallSession implements VoiceSession {
           type: "session.update",
           session: {
             type: "transcription",
+            // LEA-196: how sure the recognition is about each word; noise gets invented words with low probabilities.
+            include: ["item.input_audio_transcription.logprobs"],
             audio: {
               input: {
                 format: this.audioFormat === "mulaw8" ? { type: "audio/pcmu" } : { type: "audio/pcm", rate: 24000 },
@@ -229,52 +242,72 @@ export class PipelineCallSession implements VoiceSession {
       this.quality.callerSpeechStarted();
       this.watchdog?.callerSoundStarted();
       this.speechStartedAt = Date.now();
-      if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
-      this.bargeInTimer = setTimeout(() => this.onVerifiedCallerSpeech(true), BARGE_IN_CONFIRM_MS);
+      this.audioStartMs = typeof msg["audio_start_ms"] === "number" ? (msg["audio_start_ms"] as number) : undefined;
+      this.gate.speechStarted();
+      if (this.soundTimer) clearTimeout(this.soundTimer);
+      this.soundTimer = setTimeout(() => this.onCallerSpoke(), CALLER_SOUND_CONFIRM_MS);
     } else if (type === "input_audio_buffer.speech_stopped") {
       this.quality.callerSpeechStopped();
       this.watchdog?.callerSoundStopped();
-      if (this.bargeInTimer) { clearTimeout(this.bargeInTimer); this.bargeInTimer = null; }
+      if (this.soundTimer) { clearTimeout(this.soundTimer); this.soundTimer = null; }
       this.lastSpeechMs = this.speechStartedAt ? Date.now() - this.speechStartedAt : 0;
+      this.gate.speechStopped({ startMs: this.audioStartMs, endMs: typeof msg["audio_end_ms"] === "number" ? (msg["audio_end_ms"] as number) : undefined });
     } else if (type === "conversation.item.input_audio_transcription.completed") {
-      const text = String(msg["transcript"] ?? "");
-      this.quality.callerTranscribed(text);
-      if (text.trim()) this.quality.turnTranscribed();
-      this.watchdog?.transcriptDone();
-      this.logger.handleOpenAIEvent(msg);
-      if (this.ended) return;
-      if (text.trim()) { this.unclearInRow = 0; this.onVerifiedCallerSpeech(false); this.startTurn(text.trim()); }
-      else this.onUnclearSpeech();
+      this.onTranscript(msg);
     } else if (type === "conversation.item.input_audio_transcription.failed") {
       logger.warn("transcription of an utterance failed", { event: "stt.transcription_failed", detail: JSON.stringify(msg).slice(0, 300) });
       this.watchdog?.transcriptDone();
+      this.gate.transcript("", false);
       if (!this.ended) this.onUnclearSpeech();
     }
   }
 
-  // The caller really speaks (the sound lasted long enough, or it was transcribed into words): the line is not silent
-  // and a goodbye in progress can be taken back. Only `cut` (the sound lasted a full second) also stops speech that is
-  // playing or being produced; words alone never do (LEA-179). A turn that is still thinking is replaced when the new
-  // words are recognised.
-  private onVerifiedCallerSpeech(cut: boolean): void {
-    if (this.bargeInTimer) { clearTimeout(this.bargeInTimer); this.bargeInTimer = null; }
+  // A transcript arrived (LEA-196). Low confidence (invented words from noise) can be dropped here; otherwise it goes to the
+  // turn gate, which sends it to the model when it is quiet. The decision is written to the call events either way, so the
+  // limits can be set from real calls (PIPELINE_CONFIDENCE=measure is the default: measure and log, drop nothing).
+  private onTranscript(msg: Record<string, unknown>): void {
+    const text = String(msg["transcript"] ?? "");
+    const spoken = text.trim().length > 0;
+    this.quality.callerTranscribed(text);
+    if (spoken) this.quality.turnTranscribed();
+    this.watchdog?.transcriptDone();
+
+    const confidence = analyzeLogprobs(msg["logprobs"]);
+    const low = isLowConfidence(confidence, pipelineConfidenceLimits());
+    const drop = low && pipelineConfidenceMode() === "on";
+    if (!drop) this.logger.handleOpenAIEvent(msg); // a dropped transcript is not part of the saved conversation
+    if (this.ended) return;
+
+    const heard = this.gate.transcript(text, !drop);
+    if (spoken) {
+      this.logger.logEvent("turn.heard", "system", {
+        text,
+        sound_ms: Number.isFinite(heard.soundMs) ? Math.round(heard.soundMs) : null,
+        over_assistant: heard.overlap,
+        tokens: confidence?.tokens ?? null,
+        min_logprob: confidence ? Math.round(confidence.minLogprob * 100) / 100 : null,
+        avg_logprob: confidence ? Math.round(confidence.avgLogprob * 100) / 100 : null,
+        low_confidence: low,
+        action: drop ? "dropped" : low ? "would_drop" : heard.overlap ? "kept_over_assistant" : "kept",
+      });
+    }
+    if (spoken && !drop) { this.unclearInRow = 0; this.onCallerSpoke(); }
+    else if (!spoken) this.onUnclearSpeech();
+  }
+
+  // The caller really speaks (the sound lasted long enough, or it was transcribed into words): the line is not silent and a
+  // goodbye in progress can be taken back. It never stops the assistant: nothing the caller says cuts her off (LEA-196).
+  private onCallerSpoke(): void {
+    if (this.soundTimer) { clearTimeout(this.soundTimer); this.soundTimer = null; }
     if (this.ended) return;
     this.watchdog?.callerSpoke();
     this.cancelHangupIfCallerSpeaks();
-    if (cut && (this.clock.audible() || this.speech?.busy) && !this.answerIsShort()) this.bargeIn();
-  }
-
-  // The answer being spoken has only a few words: let it finish.
-  private answerIsShort(): boolean {
-    const entry = this.assistantEntry !== null ? this.history[this.assistantEntry] : null;
-    if (!entry || !("role" in entry) || entry.role !== "assistant") return false;
-    return entry.content.trim().split(/\s+/).length <= NO_BARGE_IN_WORDS;
   }
 
   // The caller talked for a while but nothing could be made of it: ask once more instead of staying silent.
   private onUnclearSpeech(): void {
     if (!pipelineBridgeSentences()) return; // LEA-180: off by default
-    if (this.givingUp || this.turnActive || !this.speech || this.speech.busy || this.clock.audible()) return;
+    if (this.givingUp || this.turnActive || !this.speech || this.speech.busy || this.clock.audible() || this.gate.hasPending()) return;
     if (this.lastSpeechMs < UNCLEAR_MIN_SPEECH_MS || this.unclearInRow >= MAX_UNCLEAR_IN_ROW) return;
     this.unclearInRow++;
     const sentence = this.promptSnapshot.text(effectiveLanguage(this.settings) === "en" ? P.unclearEn : P.unclearCs);
@@ -499,27 +532,6 @@ export class PipelineCallSession implements VoiceSession {
     this.callbacks.sendJson({ type: "engine.tool_done", name: call.name });
   }
 
-  // ─── The caller interrupts ──────────────────────────────────────────────────────
-
-  private bargeIn(): void {
-    const queuedMs = this.clock.remainingMs();
-    const heard = this.speech?.cancel() ?? "";
-    this.abortTurn();
-    // The conversation keeps only what the caller heard of the interrupted answer.
-    if (this.assistantEntry !== null && this.history[this.assistantEntry] && "role" in this.history[this.assistantEntry]) {
-      if (heard) this.history[this.assistantEntry] = { role: "assistant", content: heard };
-      else this.history.splice(this.assistantEntry, 1);
-    } else if (heard) {
-      this.history.push({ role: "assistant", content: heard });
-    }
-    this.assistantEntry = null;
-    this.callbacks.clearAudio?.();
-    this.callbacks.sendJson({ type: "engine.clear_audio" });
-    this.clock.clear();
-    this.quality.playbackCleared();
-    logger.info("caller interrupted the assistant", { event: "call.barge_in", engine: "pipeline", heard_chars: heard.length, unheard_ms: queuedMs });
-  }
-
   // ─── End of the call ────────────────────────────────────────────────────────────
 
   private async hangUp(turn: number, resumable: boolean): Promise<void> {
@@ -647,7 +659,8 @@ export class PipelineCallSession implements VoiceSession {
   /** Close everything without writing the call (the engine could not start; the call row is removed). */
   async abort(): Promise<void> {
     this.watchdog?.stop();
-    if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
+    if (this.soundTimer) clearTimeout(this.soundTimer);
+    this.gate.dispose();
     this.ended = true;
     this.abortTurn();
     this.speech?.close();
@@ -659,7 +672,8 @@ export class PipelineCallSession implements VoiceSession {
     if (this.ended) return;
     this.ended = true;
     this.watchdog?.stop();
-    if (this.bargeInTimer) clearTimeout(this.bargeInTimer);
+    if (this.soundTimer) clearTimeout(this.soundTimer);
+    this.gate.dispose();
     this.abortTurn();
     logger.info("session ending, generating summary", { event: "call.ending" });
     this.speech?.close();
