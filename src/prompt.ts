@@ -221,6 +221,7 @@ export function buildTools(settings: AssistantSettings | null, snapshot: PromptS
           properties: {
             service_id: param("get_day_availability", "service_id", "string"),
             from_date: param("get_day_availability", "from_date", "string"),
+            from_time: param("get_day_availability", "from_time", "string"),
             days: param("get_day_availability", "days", "number"),
           },
           required: ["from_date"],

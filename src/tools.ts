@@ -64,6 +64,7 @@ export async function executeTool(
         days: String(args["days"] ?? 7),
       });
       if (args["from_date"]) params.set("from", String(args["from_date"]));
+      if (args["from_time"]) params.set("from_time", String(args["from_time"]));
       if (args["service_id"]) params.set("service_id", String(args["service_id"]));
       result = unwrap(await callApi(`${base}/api/calendar/windows?${params}`, { headers: internalHeaders() }, READ));
     } else if (name === "web_search") {
