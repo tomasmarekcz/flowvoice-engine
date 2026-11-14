@@ -25,7 +25,7 @@ export function buildDateTimeBlock(settings: AssistantSettings | null, snapshot:
 
 // ─── Section 2: Business context — loaded from DB, shown to AI as facts ────────
 
-function buildBusinessContext(settings: AssistantSettings | null, callerPhone: string | null | undefined, snapshot: PromptSnapshot): string {
+function buildBusinessContext(settings: AssistantSettings | null, snapshot: PromptSnapshot): string {
   const lines: string[] = [
     snapshot.text(P.callBusinessContextIntro),
     "",
@@ -43,14 +43,13 @@ function buildBusinessContext(settings: AssistantSettings | null, callerPhone: s
     lines.push(`The business offers the following services: ${services.join(", ")}.`);
   }
 
-  lines.push("");
-  lines.push(buildDateTimeBlock(settings, snapshot));
+  return lines.join("\n");
+}
 
-  if (callerPhone) {
-    lines.push("");
-    lines.push(snapshot.text(P.callerPhoneKnown, { phone: callerPhone }));
-  }
-
+// LEA-209: what is true about this call right now (the time, the caller's number), apart from the facts about the business.
+function buildThisCall(settings: AssistantSettings | null, callerPhone: string | null | undefined, snapshot: PromptSnapshot): string {
+  const lines = [buildDateTimeBlock(settings, snapshot)];
+  if (callerPhone) lines.push(snapshot.text(P.callerPhoneKnown, { phone: callerPhone }));
   return lines.join("\n");
 }
 
@@ -86,26 +85,26 @@ export function buildPromptFromSettings(
   opts: { includeGreeting?: boolean; includeEnding?: boolean } = {},
   snapshot: PromptSnapshot = emptySnapshot()
 ): string {
+  // LEA-209 order: who you are, this call, the business, the owner's instructions, the tools and their rules, greeting, ending.
   const sections: string[] = [
     personaBlock(settings, snapshot),
-    snapshot.text(P.callBase),
-    buildBusinessContext(settings, callerPhone, snapshot),
-    snapshot.text(P.callToolsPreamble),
-    snapshot.text(P.callToolFailureRule),
+    buildThisCall(settings, callerPhone, snapshot),
+    buildBusinessContext(settings, snapshot),
   ];
+  const instructions = buildBusinessInstructions(settings, snapshot);
+  if (instructions) sections.push(instructions);
+  sections.push(snapshot.text(P.callToolsPreamble), snapshot.text(P.callToolFailureRule));
   const guide = buildToolsGuide(settings, snapshot);
   if (guide) sections.push(guide);
   // LEA-130: a business that does not book appointments through the assistant (calendar off) gets enquiries instead.
   const calendarOn = (settings?.capabilities ?? { calendar: true })["calendar"];
   if (settings && !calendarOn) sections.push(snapshot.text(P.callBookingEnquiryOnly));
-  const instructions = buildBusinessInstructions(settings, snapshot);
-  if (instructions) sections.push(instructions);
-  // LEA-158: how to end the call (Live's backend has its own rule, so it asks for no ending rule here).
-  if (opts.includeEnding !== false && endCallEnabled(settings)) sections.push(snapshot.text(P.callEndingRule));
   if (opts.includeGreeting !== false) {
     const greeting = buildGreetingRule(settings, snapshot);
     if (greeting) sections.push(greeting);
   }
+  // LEA-158: how to end the call (Live's backend has its own rule, so it asks for no ending rule here).
+  if (opts.includeEnding !== false && endCallEnabled(settings)) sections.push(snapshot.text(P.callEndingRule));
   // Last on purpose: nothing the customer wrote above can override these (LEA-157).
   sections.push(buildProtectedCore(settings, snapshot));
   return sections.join("\n\n");
@@ -118,7 +117,7 @@ export function buildToolsGuide(settings: AssistantSettings | null, snapshot: Pr
   if (caps["calendar"]) lines.push(snapshot.text(P.callToolsGuideServices), snapshot.text(P.callToolsGuideAvailability));
   if (caps["business_knowledge"]) lines.push(snapshot.text(caps["web_search"] ? P.callToolsGuideKnowledgeWeb : P.callToolsGuideKnowledge));
   else if (caps["web_search"]) lines.push(snapshot.text(P.callToolsGuideWeb));
-  if (caps["enquiries"] !== false) lines.push(snapshot.text(P.callToolsGuideUnknown));
+  if (caps["enquiries"] !== false) lines.push(snapshot.text(P.callToolsGuideUnknown, { triggers: buildEnquiryRules(settings).conditions.join("; ") }));
   return lines.length > 0 ? `===WHEN TO USE WHICH TOOL===\n${lines.join("\n")}` : null;
 }
 

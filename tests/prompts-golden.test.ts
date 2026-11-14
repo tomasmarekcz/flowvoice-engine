@@ -25,10 +25,10 @@ const snap = (entries: Array<[string, string]>) =>
 describe("overrides change exactly the targeted text", () => {
   const s = SETTINGS.full;
 
-  it("base prompt", () => {
-    const out = buildPromptFromSettings(s, null, {}, snap([[ENGINE_PROMPTS.callBase.key, "NEW BASE"]]));
-    // The persona block (LEA-163) comes first; the base prompt follows it.
-    expect(out).toContain("NEW BASE\n\n===BUSINESS CONTEXT===");
+  it("persona", () => {
+    const out = buildPromptFromSettings(s, null, {}, snap([[ENGINE_PROMPTS.personaCs.key, "NEW PERSONA {{address_rule}} {{gender_rule}}"]]));
+    // The persona block (LEA-163, LEA-209) is the first part of the prompt.
+    expect(out.startsWith("NEW PERSONA ")).toBe(true);
     expect(out).toContain("===TOOLS===");
   });
 
@@ -63,7 +63,7 @@ describe("overrides change exactly the targeted text", () => {
   });
 
   it("an invalid override (undeclared placeholder) is ignored", () => {
-    const out = buildPromptFromSettings(s, null, {}, snap([[ENGINE_PROMPTS.callBase.key, "bad {{nope}}"]]));
+    const out = buildPromptFromSettings(s, null, {}, snap([[ENGINE_PROMPTS.callBusinessContextIntro.key, "bad {{nope}}"]]));
     expect(out).toBe(buildPromptFromSettings(s, null, {}));
   });
 });

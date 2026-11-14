@@ -102,10 +102,11 @@ describe("bookingInstruction (LEA-166)", () => {
     expect(noPhone).toMatch(/is confirmed/);
     expect(noPhone).not.toMatch(/text message/);
   });
-  it("tells the assistant a waiting booking is preliminary and promises nothing else", () => {
+  it("tells the assistant a waiting booking is preliminary and that the business confirms it (LEA-209)", () => {
     const text = bookingInstruction({ id: "e1", status: "pending_review" }, true);
     expect(text).toMatch(/preliminary/);
-    expect(text).toMatch(/do not promise a text message/i);
+    expect(text).toMatch(/will confirm it with SMS or email/i);
+    expect(text).toMatch(/do not present it as confirmed/i);
   });
   it("says nothing when the booking failed", () => {
     expect(bookingInstruction({ error: "slot_taken" }, true)).toBeNull();

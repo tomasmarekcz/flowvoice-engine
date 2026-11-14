@@ -146,7 +146,7 @@ export class PipelineCallSession implements VoiceSession {
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
     if (this.options.fallbackReason) callCreated.then(() => this.quality.markFallback(this.options.fallbackReason!));
 
-    this.instructions = `${buildPromptFromSettings(settings, this.callerPhone, { includeGreeting: false }, promptSnapshot)}\n\n${promptSnapshot.text(P.spokenStyle)}`;
+    this.instructions = buildPromptFromSettings(settings, this.callerPhone, { includeGreeting: false }, promptSnapshot);
     this.tools = buildTools(settings, promptSnapshot);
     const voiceName = resolveVoice(settings);
     this.logger.openaiPayload = {
@@ -599,9 +599,6 @@ export class PipelineCallSession implements VoiceSession {
   private hintFor(fixed: string): string | null {
     const texts = fixedTexts(this.settings, this.promptSnapshot);
     const snap = this.promptSnapshot;
-    if (fixed === texts.silenceAsk) return snap.text(P.hintSilenceAsk);
-    if (fixed === texts.silenceBye) return snap.text(P.hintSilenceBye);
-    if (fixed === texts.limitWarning) return snap.text(P.hintLimitWarning);
     if (fixed === texts.limitBye) return snap.text(P.hintLimitBye);
     return null;
   }

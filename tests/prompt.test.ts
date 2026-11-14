@@ -37,7 +37,7 @@ const BASE: AssistantSettings = {
 describe("buildPromptFromSettings", () => {
   it("always contains base prompt, the exact time with the timezone, the tool-failure rule and the rules that always apply", () => {
     const prompt = buildPromptFromSettings(null);
-    expect(prompt).toContain("professional phone assistant");
+    expect(prompt).toContain("professional native Czech phone assistant");
     expect(prompt).toMatch(/Right now it is .*, \d\d:\d\d in the business's timezone \(Europe\/Prague, UTC\+0[12]:00\)/);
     expect(prompt).toContain("WHEN A TOOL FAILS");
     expect(prompt.trimEnd().endsWith("only as described in the rules for ending the call.")).toBe(true);
@@ -77,6 +77,8 @@ describe("buildPromptFromSettings", () => {
   it("always contains business context section", () => {
     const prompt = buildPromptFromSettings(null);
     expect(prompt).toContain("===BUSINESS CONTEXT===");
+    // LEA-209: the time and the caller's number are about the call, so they come before the facts about the business.
+    expect(prompt.indexOf("===DATE AND TIME===")).toBeLessThan(prompt.indexOf("===BUSINESS CONTEXT==="));
   });
 });
 
@@ -315,14 +317,14 @@ describe("which tool for which question (LEA-175)", () => {
     const text = guide({ calendar: true, business_knowledge: true, web_search: true })!;
     expect(text).toContain("get_services");
     expect(text).toContain("get_day_availability");
-    expect(text).toContain("search_knowledge first; if it finds nothing, use web_search");
+    expect(text).toContain("use search_knowledge first; if it doesn't return necessary information, use web_search");
     expect(text).toContain("create_enquiry");
   });
 
   it("has no calendar lines without the calendar and no web fallback without web search", () => {
     const text = guide({ business_knowledge: true })!;
     expect(text).not.toContain("get_services");
-    expect(text).toContain("search_knowledge first.");
+    expect(text).toContain("use search_knowledge.");
     expect(text).not.toContain("web_search");
   });
 
@@ -330,5 +332,28 @@ describe("which tool for which question (LEA-175)", () => {
     const prompt = buildPromptFromSettings({ ...BASE, capabilities: { calendar: true } }, null, {}, emptySnapshot());
     expect(prompt.match(/===WHEN TO USE WHICH TOOL===/g)).toHaveLength(1);
     expect(guide({ calendar: true })).not.toContain("end_call");
+  });
+});
+
+describe("assembly order and enquiry conditions (LEA-209)", () => {
+  it("goes role, this call, business, the owner's instructions, tools, greeting, ending, rules that always apply", () => {
+    const prompt = buildPromptFromSettings({ ...BASE, system_prompt: "OWNER TEXT", greeting_enabled: true, greeting_message: "Hello there" } as never, "+420123456789");
+    const order = ["professional native Czech phone assistant", "===DATE AND TIME===", "+420123456789", "===BUSINESS CONTEXT===", "OWNER TEXT", "===TOOLS===", "===WHEN TO USE WHICH TOOL===", "Hello there", "===ENDING THE CALL===", "===RULES THAT ALWAYS APPLY==="];
+    const positions = order.map((t) => prompt.indexOf(t));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+  });
+
+  it("puts the owner's enquiry conditions into the tool guide", () => {
+    const text = buildToolsGuide({ ...BASE, enquiries_trigger: ["custom"], enquiries_trigger_custom: "the caller mentions a leak" } as never, emptySnapshot())!;
+    expect(text).toContain("the caller mentions a leak");
+    expect(text).toContain("asks to speak with a human");
+  });
+
+  it("no longer has the old base rules or the separate spoken-style block", () => {
+    const prompt = buildPromptFromSettings(null);
+    expect(prompt).not.toContain("===SPOKEN ANSWERS===");
+    expect(prompt).not.toContain("always use the caller's language");
+    expect(prompt).toContain("read aloud on the phone");
   });
 });

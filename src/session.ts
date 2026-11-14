@@ -24,6 +24,7 @@ import type { VoiceProvider, VoiceUsage } from "./voice/types";
 import { InputBuffer } from "./input-buffer";
 import { CallWatchdog, END_CALL_MARK_FALLBACK_MS, RESUME_GRACE_MS, fixedTexts, maxCallMs, speaksEnglish, technicalErrorLine, type EndReason } from "./call-ending";
 import { fallbackClip } from "./fallback-audio";
+import { ENGINE_PROMPTS as P } from "./prompts/registry";
 
 export function formatOwnerSms(
   rawSummary: string,
@@ -275,7 +276,7 @@ export class CallSession implements VoiceSession {
   private resumeNote(): string {
     const turns = this.logger.transcript.slice(-RESUME_TRANSCRIPT_TURNS)
       .map((t) => `${t.role === "user" ? "Caller" : "Assistant"}: ${t.text}`).join("\n");
-    return `===CALL IN PROGRESS===\nThe connection dropped for a moment and was restored. The call is already under way: do NOT greet again and do not start over. This is what was said so far:\n${turns || "(nothing yet)"}\nContinue naturally from the last thing said.`;
+    return this.promptSnapshot.text(P.resumeNote, { transcript: turns || "(nothing yet)" });
   }
 
   // The connection dropped in the middle of the call: say so, make it again (twice at most), and if that fails apologise and hang up.
@@ -374,7 +375,7 @@ export class CallSession implements VoiceSession {
     if (text === this.goodbyeText) this.goodbyeSent = true;
     this.openaiWs.send(JSON.stringify({
       type: "response.create",
-      response: { instructions: `Say exactly this sentence to the caller, word for word, and nothing else: "${text}"`, tool_choice: "none" },
+      response: { instructions: this.promptSnapshot.text(P.sayExactly, { text }), tool_choice: "none" },
     }));
   }
 

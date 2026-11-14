@@ -27,6 +27,7 @@ import { fetchOwnerBookingBlock } from "./owner-booking-block";
 import { planTestCallNotifications } from "./test-call";
 import { refreshExternalCalendars } from "./ical-refresh";
 import { executeTool as defaultExecuteTool } from "./tools";
+import { ENGINE_PROMPTS as P } from "./prompts/registry";
 
 // How long Live may take to start before the call is answered by Standard instead. It was 4 s; one production call timed out
 // at that limit (30. 10. 2026) while staging starts took 1.6 s on average and 2.5 s at most.
@@ -279,7 +280,7 @@ export class LiveCallSession implements VoiceSession {
       type: "session.instructions.append",
       event_id: `fixed_${Date.now()}`,
       delegation_id: null,
-      content: `SPEAK NOW: say exactly this sentence to the caller, word for word, once, and nothing else, then wait for the caller:\n\n"${text}"`,
+      content: this.promptSnapshot.text(P.liveSayExactly, { text }),
     });
     this.send({ type: "response.create", event_id: `fixed_response_${Date.now()}` });
   }

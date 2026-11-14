@@ -292,16 +292,16 @@ describe("PipelineCallSession", () => {
   });
 
   describe("silence and limit sentences said by the model (LEA-175)", () => {
-    it("asks the model to say the silence question and does not add the hint to the conversation", async () => {
+    it("asks the model to say the call-length goodbye and does not add the hint to the conversation", async () => {
       const { session, voice, requests } = setup({ script: [[{ type: "text", delta: "Jste ještě na lince?" }]] });
       await session.start();
       const fixed = fixedTexts({ language: "cs" } as never, emptySnapshot());
-      await (session as unknown as { speakHint(t: string): Promise<void> }).speakHint(fixed.silenceAsk);
+      await (session as unknown as { speakHint(t: string): Promise<void> }).speakHint(fixed.limitBye);
       expect(requests).toHaveLength(1);
       const input = requests[0].input as Array<{ role?: string; content?: string }>;
       expect(input[input.length - 1].role).toBe("developer");
       expect(requests[0].tools).toEqual([]);
-      expect(voice.spoken.join(" ")).toContain("Jste ještě na lince?");
+      expect(voice.spoken.join(" ")).toContain("Jste ještě na lince?"); // the model's own words (scripted here)
       expect((session as unknown as { history: Array<{ role?: string }> }).history.some((h) => h.role === "developer")).toBe(false);
     });
 
@@ -309,8 +309,8 @@ describe("PipelineCallSession", () => {
       const { session, voice } = setup({ script: [[]] });
       await session.start();
       const fixed = fixedTexts({ language: "cs" } as never, emptySnapshot());
-      await (session as unknown as { speakHint(t: string): Promise<void> }).speakHint(fixed.silenceAsk);
-      expect(voice.spoken.join(" ")).toContain(fixed.silenceAsk);
+      await (session as unknown as { speakHint(t: string): Promise<void> }).speakHint(fixed.limitBye);
+      expect(voice.spoken.join(" ")).toContain(fixed.limitBye);
     });
   });
 

@@ -114,8 +114,8 @@ export class RealtimeVoice implements VoiceProvider {
     this.current = next;
     this.responseOpen = true;
     this.dropAudio = false;
-    this.send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: next.text }] } });
-    this.send({ type: "response.create", response: { instructions: this.snapshot.text(P.voiceRead) } });
+    // LEA-209: the sentence is in the instruction itself; nothing is added to the conversation.
+    this.send({ type: "response.create", response: { conversation: "none", input: [], instructions: this.snapshot.text(P.voiceRead, { text: next.text }) } });
   }
 
   private handle(msg: Record<string, unknown>): void {
