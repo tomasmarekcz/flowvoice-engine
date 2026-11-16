@@ -38,6 +38,16 @@ export interface QualityStats {
   voice_max_ms: number | null;
   total_avg_ms: number | null;
   total_max_ms: number | null;
+  /**
+   * Pipeline (LEA-211): turns where the model used a tool, and how many of them began with a short spoken sentence
+   * ("one moment, let me check"). `first_audio_ms` and dead air improve by themselves once that sentence exists, so the
+   * time to the real answer is measured on its own: from the end of the caller's speech to the first word of the answer
+   * that follows the tool work (averages and maxima in ms; null when no turn was measured).
+   */
+  tool_turns: number;
+  lead_ins: number;
+  answer_avg_ms: number | null;
+  answer_max_ms: number | null;
 }
 
 export type QualityEmit = (eventType: string, payload: Record<string, unknown>) => void;
@@ -71,10 +81,12 @@ export class CallQualityTracker {
     first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
     turns_measured: 0, stt_avg_ms: null, stt_max_ms: null, llm_avg_ms: null, llm_max_ms: null,
     voice_avg_ms: null, voice_max_ms: null, total_avg_ms: null, total_max_ms: null,
+    tool_turns: 0, lead_ins: 0, answer_avg_ms: null, answer_max_ms: null,
   };
   // The turn being timed (Pipeline): when the caller's speech stopped, the transcript came, the model's first word came.
   private turn: { stopAt: number; sttAt?: number; llmAt?: number } | null = null;
-  private lat = { stt: [] as number[], llm: [] as number[], voice: [] as number[], total: [] as number[] };
+  private lat = { stt: [] as number[], llm: [] as number[], voice: [] as number[], total: [] as number[], answer: [] as number[] };
+  private lastStopAt: number | null = null;
   private readonly startedAt: number;
   private lastInboundTimestamp: number | null = null;
   private levelSum = 0;
@@ -144,6 +156,7 @@ export class CallQualityTracker {
     this.safely(() => {
       this.lastActivityAt = this.now();
       this.turn = { stopAt: this.now() }; // Pipeline timing starts here
+      this.lastStopAt = this.turn.stopAt;
     });
   }
 
@@ -155,6 +168,28 @@ export class CallQualityTracker {
   /** Pipeline: the model produced the first word of its answer (later calls in the same turn are ignored). */
   turnFirstText(): void {
     this.safely(() => { if (this.turn && this.turn.sttAt !== undefined && this.turn.llmAt === undefined) this.turn.llmAt = this.now(); });
+  }
+
+  /** Pipeline (LEA-211): the model's first step of a turn used a tool; `saidFirst` = it spoke a sentence before calling it. */
+  toolStep(saidFirst: boolean): void {
+    this.safely(() => {
+      this.stats.tool_turns++;
+      if (saidFirst) {
+        this.stats.lead_ins++;
+        this.emit("quality.lead_in", { after_ms: this.lastStopAt === null ? null : Math.round(this.now() - this.lastStopAt) });
+      }
+    });
+  }
+
+  /** Pipeline (LEA-211): the first word of the answer that follows the tool work (or of a turn without tools) arrived. */
+  answerStarted(): void {
+    this.safely(() => {
+      if (this.lastStopAt === null) return;
+      const answer = this.now() - this.lastStopAt;
+      if (answer < 0 || answer > 120_000) return;
+      this.lat.answer.push(answer);
+      this.emit("quality.answer_latency", { answer_ms: Math.round(answer) });
+    });
   }
 
   // The first sound of the answer reached the line: the turn is complete.
@@ -263,6 +298,7 @@ export class CallQualityTracker {
       llm_avg_ms: avg(this.lat.llm), llm_max_ms: max(this.lat.llm),
       voice_avg_ms: avg(this.lat.voice), voice_max_ms: max(this.lat.voice),
       total_avg_ms: avg(this.lat.total), total_max_ms: max(this.lat.total),
+      answer_avg_ms: avg(this.lat.answer), answer_max_ms: max(this.lat.answer),
     };
   }
 

@@ -137,6 +137,109 @@ describe("PipelineCallSession", () => {
     expect(voice.spoken.join(" ")).toContain("volno ve tři");
   });
 
+  // LEA-211
+  describe("tools asked for together", () => {
+    const twoLookups: LlmEvent[] = [
+      { type: "tool_call", callId: "k1", name: "search_knowledge", arguments: "{\"query\":\"a\"}" },
+      { type: "tool_call", callId: "w1", name: "web_search", arguments: "{\"query\":\"b\"}" },
+    ];
+
+    it("runs read-only lookups at the same time and writes the outputs in the order asked", async () => {
+      const startedAt: Record<string, number> = {};
+      // The first lookup is slower, so it finishes second: the history must still list it first.
+      h.executeTool.mockImplementation(async (name: string) => {
+        startedAt[name] = Date.now();
+        await new Promise((r) => setTimeout(r, name === "search_knowledge" ? 30 : 5));
+        return { result: { from: name }, embeddingTokens: 0 };
+      });
+      const { session, sockets, requests } = setup({ script: [twoLookups, [{ type: "text", delta: "Hotovo." }]] });
+      await session.start();
+      sockets[0].say(transcribed("Jak probíhá konzultace?"));
+      await flush(80);
+      expect(Math.abs(startedAt["search_knowledge"] - startedAt["web_search"])).toBeLessThan(15);
+      const second = requests[1].input as Array<Record<string, unknown>>;
+      expect(second.map((i) => i["type"] ?? i["role"])).toEqual(["user", "function_call", "function_call", "function_call_output", "function_call_output"]);
+      expect(second.slice(3).map((i) => i["call_id"])).toEqual(["k1", "w1"]);
+    });
+
+    it("asks the model for parallel tool calls, and PIPELINE_PARALLEL_TOOLS=off turns it back", async () => {
+      const a = setup({ script: [[{ type: "text", delta: "Ahoj." }]] });
+      await a.session.start();
+      a.sockets[0].say(transcribed("Ahoj"));
+      await flush();
+      expect(a.requests[0].parallelTools).toBe(true);
+      process.env.PIPELINE_PARALLEL_TOOLS = "off";
+      try {
+        const b = setup({ script: [[{ type: "text", delta: "Ahoj." }]] });
+        await b.session.start();
+        b.sockets[0].say(transcribed("Ahoj"));
+        await flush();
+        expect(b.requests[0].parallelTools).toBe(false);
+        expect(b.requests[0].instructions).not.toContain("together in the same step");
+      } finally {
+        delete process.env.PIPELINE_PARALLEL_TOOLS;
+      }
+    });
+
+    it("never runs a tool that writes alongside another tool", async () => {
+      let running = 0;
+      let maxRunning = 0;
+      h.executeTool.mockImplementation(async () => {
+        running++; maxRunning = Math.max(maxRunning, running);
+        await new Promise((r) => setTimeout(r, 10));
+        running--;
+        return { result: { ok: true }, embeddingTokens: 0 };
+      });
+      const { session, sockets } = setup({
+        script: [
+          [
+            { type: "tool_call", callId: "k1", name: "search_knowledge", arguments: "{}" },
+            { type: "tool_call", callId: "e1", name: "create_enquiry", arguments: "{}" },
+          ],
+          [{ type: "text", delta: "Zapsáno." }],
+        ],
+      });
+      await session.start();
+      sockets[0].say(transcribed("Zapište mě"));
+      await flush(80);
+      expect(maxRunning).toBe(1);
+    });
+
+    it("keeps the conversation valid when one lookup fails", async () => {
+      h.executeTool.mockImplementation(async (name: string) => {
+        if (name === "web_search") throw new Error("boom");
+        return { result: { ok: true }, embeddingTokens: 0 };
+      });
+      const { session, sockets, requests } = setup({ script: [twoLookups, [{ type: "text", delta: "Nevím." }]] });
+      await session.start();
+      sockets[0].say(transcribed("Jak probíhá konzultace?"));
+      await flush(40);
+      const second = requests[1].input as Array<Record<string, unknown>>;
+      expect(second.filter((i) => i["type"] === "function_call_output")).toHaveLength(2);
+    });
+  });
+
+  describe("a short sentence before a tool", () => {
+    it("tells the model to say it, and counts the turns that began with one", async () => {
+      const { session, sockets, requests } = setup({
+        script: [
+          [{ type: "text", delta: "Moment, hned se podívám." }, { type: "tool_call", callId: "c1", name: "get_services", arguments: "{}" }],
+          [{ type: "text", delta: "Máme konzultaci." }],
+        ],
+      });
+      await session.start();
+      expect(requests).toHaveLength(0);
+      sockets[0].say(transcribed("Jaké máte služby?"));
+      await flush(20);
+      expect(requests[0].instructions).toContain("===BEFORE A TOOL===");
+      // The sentence is part of the conversation, so the next step knows it was already said.
+      const second = requests[1].input as Array<Record<string, unknown>>;
+      expect(second.map((i) => i["type"] ?? i["role"])).toEqual(["user", "assistant", "function_call", "function_call_output"]);
+      const stats = (await session.end(), h.finishCall.mock.calls[0][0].quality);
+      expect(stats).toMatchObject({ tool_turns: 1, lead_ins: 1 });
+    });
+  });
+
   it("says a goodbye and hangs up after end_call", async () => {
     const { session, sockets, sent } = setup({
       script: [[{ type: "text", delta: "Na shledanou." }, { type: "tool_call", callId: "e1", name: "end_call", arguments: "{}" }]],

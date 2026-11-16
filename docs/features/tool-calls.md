@@ -66,3 +66,15 @@ Needs the dashboard routes in its `docs/technical.md`; `rejected` bodies must ha
 ---
 
 **Owner:** Tomáš Marek · **Last verified:** 2026-11-03, branch `tomasmarekcz/lea-157-159-162` · **Issues:** LEA-159
+
+## Faster answers in the Pipeline engine (LEA-211)
+
+Measured on a staging call (16 Nov 2026): the caller waited 9.5 to 13.8 s for an answer, almost all of it the model (2 to 5 s per step, one step more for every tool) and the lookups (web search 4.5 to 5.4 s). Three changes, all for the Pipeline engine only:
+
+- **A spoken sentence before a tool.** The prompt `engine.call.tool_lead_in` (block `===BEFORE A TOOL===`, right after `===TOOLS===` in `buildPromptFromSettings`, only with the option `includeToolLeadIn`) makes the model say one very short sentence ("Moment, hned se podívám.") in the same step and then call the tool. It is the model's own text: it is streamed to the voice like any answer and stored in the history, so the next step knows it was said. The fixed filler sentences (`PIPELINE_BRIDGE_SENTENCES`) stay off.
+- **Lookups together.** `parallel_tool_calls` is on (`PIPELINE_PARALLEL_TOOLS=off` turns it back). When one step asks for several tools and all are read-only (`READ_ONLY_TOOLS` in `pipeline-session.ts`: `search_knowledge`, `web_search`, `get_services`, `get_resources`, `get_day_availability`), `runTurn` runs them with `Promise.all`; the `function_call` items go into the history first, then the outputs in the order asked (not the order they finished), also when the caller interrupts, so no call is left without an output. A tool that writes (`create_calendar_event`, `create_enquiry`) or ends the call is never run beside another; the old one-by-one loop handles it. A failing lookup gives `{"error":"tool_failed"}` and the others still count. The prompt `engine.call.tools_guide_knowledge_web_parallel` replaces the knowledge-then-web rule so the model may call both in one step.
+- **Effort.** Model and effort are unchanged in code (`gpt-6-luna`, `low`); `PIPELINE_LLM_EFFORT=none` is the staging test (LEA-211). Which model is best is decided by a measurement, not here.
+
+Measuring: `calls.quality` has `tool_turns`, `lead_ins`, `answer_avg_ms`, `answer_max_ms`; call events `quality.lead_in` (`after_ms` since the caller stopped) and `quality.answer_latency` (to the first word of the answer after the tools). `first_audio_ms` and dead air improve by themselves once the sentence exists, so judge speed by `answer_*`.
+
+Known risks: the model may skip or repeat the sentence (watch `lead_ins / tool_turns`); with both lookups started together a web search can run although the documents would have answered.

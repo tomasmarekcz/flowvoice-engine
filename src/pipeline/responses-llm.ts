@@ -11,6 +11,8 @@ export interface LlmRequest {
   model: string;
   /** Reasoning effort ("low" is the default: follows the rules better than "none" and the answer still starts fast). Empty = leave to the model. */
   effort: string;
+  /** The model may ask for several tools in one step (the engine then runs the read-only ones together). */
+  parallelTools?: boolean;
   instructions: string;
   /** The conversation so far, in Responses API input items. */
   input: unknown[];
@@ -33,7 +35,7 @@ export const responsesLlm: LlmStream = async function* (request) {
       store: false,
       instructions: request.instructions,
       input: request.input,
-      ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
+      ...(request.tools.length > 0 ? { tools: request.tools, tool_choice: "auto", parallel_tool_calls: request.parallelTools === true } : {}),
       ...(request.effort ? { reasoning: { effort: request.effort } } : {}),
     }),
   });

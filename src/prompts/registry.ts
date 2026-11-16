@@ -219,6 +219,13 @@ The following information describes the business you represent. Use it to answer
     `===TOOLS===
 Use the available tools whenever they are needed to provide accurate information or complete the caller's request. Follow each tool's requirements exactly. Do not claim that an action succeeded unless the capability returned a successful result.`),
 
+  // LEA-211: the short sentence the assistant says before it looks something up, so the caller does not sit in silence while
+  // the tool runs. It is the model's own sentence (natural, in the caller's language), streamed to the voice like any answer.
+  callToolLeadIn: def("call.tool_lead_in", "Věta před nástrojem (Vlastní řetězec)",
+    "Ve Vlastním řetězci v bloku o nástrojích, hned za úvodem k nástrojům. Asistent před použitím nástroje (hledání, kalendář, zápis) řekne jednu velmi krátkou větu, např. „Moment, hned se podívám.“, aby volající neslyšel ticho. Jen jednou na otázku a nikdy po výsledku.", "during_call",
+    `===BEFORE A TOOL===
+When you are about to use a tool, first say one very short sentence to the caller in the language you are speaking (at most six words, for example "Moment, hned se podívám." or "One moment, let me check."), in the same turn, and then call the tool. Vary the wording. Say it once per caller question: not again before a second tool, and never after a tool result. Do not promise a result. Skip it only for end_call.`),
+
   // LEA-175: which tool for which question. Built only from the capabilities that are on; the ending of the call is in callEndingRule.
   callToolsGuideServices: def("call.tools_guide_services", "Kdy který nástroj: služby (Standard, Live, Hybrid, Vlastní řetězec)",
     "V hovoru, když je zapnutý kalendář. Služby a ceny se berou z nástroje, ne z paměti.", "during_call",
@@ -232,6 +239,9 @@ Use the available tools whenever they are needed to provide accurate information
   callToolsGuideKnowledgeWeb: def("call.tools_guide_knowledge_web", "Kdy který nástroj: fakta o firmě (znalosti a web)",
     "V hovoru, když jsou zapnuté firemní znalosti i vyhledávání na webu.", "during_call",
     `- Facts about this business (hours, addresses, insurance, payment, parking, team): use search_knowledge first; if it doesn't return necessary information, use web_search. Do not say you do not know before you have tried both.`),
+  callToolsGuideKnowledgeWebParallel: def("call.tools_guide_knowledge_web_parallel", "Kdy který nástroj: fakta o firmě (znalosti a web, souběžně; Vlastní řetězec)",
+    "Ve Vlastním řetězci místo předchozího pravidla, když jsou zapnuté firemní znalosti i vyhledávání na webu. Asistent smí u otázek, které dokumenty asi nepokryjí, zavolat znalosti i web najednou, aby volající nečekal dvakrát.", "during_call",
+    `- Facts about this business (hours, addresses, insurance, payment, parking, team): use search_knowledge first. When the question is about how something works or what is on the business's website, call search_knowledge and web_search together in the same step, so the caller does not wait twice. If search_knowledge returns nothing useful and you have not used web_search yet, use web_search. Do not say you do not know before you have tried both.`),
   callToolsGuideWeb: def("call.tools_guide_web", "Kdy který nástroj: fakta o firmě (jen web)",
     "V hovoru, když je zapnuté vyhledávání na webu a firemní znalosti ne.", "during_call",
     `- Facts about this business that you were not given: use web_search. Never say you do not know before you have searched.`),

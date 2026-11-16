@@ -71,3 +71,7 @@ Known gaps: the Czech phrase "(mluv hned)" inside the English Live greeting inst
 ## Offering times (LEA-192)
 
 The assistant asks once when it would suit the caller, then offers exactly three times from the `suggested` list of `get_day_availability` (dashboard `/api/calendar/windows`). With no preference it does not ask again. New optional parameter `from_time` (part of the day). If none suits it calls the tool again with the new preference. Text: `callToolsGuideAvailability` and the `get_day_availability` description in `src/prompts/registry.ts`. The engine must be released after the dashboard (the `suggested` field comes from the dashboard).
+
+## A sentence before a tool (LEA-211)
+
+New prompts `engine.call.tool_lead_in` (the block `===BEFORE A TOOL===`, built into the instructions only for the Pipeline engine, between the tools preamble and the tool-failure rule) and `engine.call.tools_guide_knowledge_web_parallel` (used instead of `call.tools_guide_knowledge_web` when parallel tools are on). Both are editable in Admin → AI Settings. Details and measurements: `docs/features/tool-calls.md`.

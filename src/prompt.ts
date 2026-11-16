@@ -82,7 +82,7 @@ function languageName(value: string): string {
 export function buildPromptFromSettings(
   settings: AssistantSettings | null,
   callerPhone?: string | null,
-  opts: { includeGreeting?: boolean; includeEnding?: boolean } = {},
+  opts: { includeGreeting?: boolean; includeEnding?: boolean; includeToolLeadIn?: boolean; parallelTools?: boolean } = {},
   snapshot: PromptSnapshot = emptySnapshot()
 ): string {
   // LEA-209 order: who you are, this call, the business, the owner's instructions, the tools and their rules, greeting, ending.
@@ -93,8 +93,11 @@ export function buildPromptFromSettings(
   ];
   const instructions = buildBusinessInstructions(settings, snapshot);
   if (instructions) sections.push(instructions);
-  sections.push(snapshot.text(P.callToolsPreamble), snapshot.text(P.callToolFailureRule));
-  const guide = buildToolsGuide(settings, snapshot);
+  sections.push(snapshot.text(P.callToolsPreamble));
+  // LEA-211 (Custom chain only): a short spoken sentence before a tool, right after the tools preamble.
+  if (opts.includeToolLeadIn) sections.push(snapshot.text(P.callToolLeadIn));
+  sections.push(snapshot.text(P.callToolFailureRule));
+  const guide = buildToolsGuide(settings, snapshot, { parallelTools: opts.parallelTools });
   if (guide) sections.push(guide);
   // LEA-130: a business that does not book appointments through the assistant (calendar off) gets enquiries instead.
   const calendarOn = (settings?.capabilities ?? { calendar: true })["calendar"];
@@ -111,11 +114,11 @@ export function buildPromptFromSettings(
 }
 
 /** LEA-175: which tool to use for which question, only for the capabilities that are on (ending the call has its own rule). */
-export function buildToolsGuide(settings: AssistantSettings | null, snapshot: PromptSnapshot): string | null {
+export function buildToolsGuide(settings: AssistantSettings | null, snapshot: PromptSnapshot, opts: { parallelTools?: boolean } = {}): string | null {
   const caps = settings?.capabilities ?? { calendar: true, lead_collection: true };
   const lines: string[] = [];
   if (caps["calendar"]) lines.push(snapshot.text(P.callToolsGuideServices), snapshot.text(P.callToolsGuideAvailability));
-  if (caps["business_knowledge"]) lines.push(snapshot.text(caps["web_search"] ? P.callToolsGuideKnowledgeWeb : P.callToolsGuideKnowledge));
+  if (caps["business_knowledge"]) lines.push(snapshot.text(caps["web_search"] ? (opts.parallelTools ? P.callToolsGuideKnowledgeWebParallel : P.callToolsGuideKnowledgeWeb) : P.callToolsGuideKnowledge));
   else if (caps["web_search"]) lines.push(snapshot.text(P.callToolsGuideWeb));
   if (caps["enquiries"] !== false) lines.push(snapshot.text(P.callToolsGuideUnknown, { triggers: buildEnquiryRules(settings).conditions.join("; ") }));
   return lines.length > 0 ? `===WHEN TO USE WHICH TOOL===\n${lines.join("\n")}` : null;

@@ -249,7 +249,42 @@ describe("safety", () => {
       first_audio_ms: null, inbound_gaps: 0, caller_dbfs: null,
       turns_measured: 0, stt_avg_ms: null, stt_max_ms: null, llm_avg_ms: null, llm_max_ms: null,
       voice_avg_ms: null, voice_max_ms: null, total_avg_ms: null, total_max_ms: null,
+      tool_turns: 0, lead_ins: 0, answer_avg_ms: null, answer_max_ms: null,
     });
+  });
+});
+
+describe("the short sentence before a tool and the time to the real answer (LEA-211)", () => {
+  it("counts turns with a tool, those that began with a spoken sentence, and times the sentence", () => {
+    const { tracker, events, advance } = setup();
+    tracker.callerSpeechStopped();
+    advance(2200);
+    tracker.toolStep(true);
+    tracker.callerSpeechStopped();
+    advance(500);
+    tracker.toolStep(false);
+    const stats = tracker.finish();
+    expect(stats).toMatchObject({ tool_turns: 2, lead_ins: 1 });
+    expect(events.filter((e) => e.type === "quality.lead_in")).toEqual([{ type: "quality.lead_in", payload: { after_ms: 2200 } }]);
+  });
+
+  it("measures the answer from the end of the caller's speech to the first word of the answer after the tools", () => {
+    const { tracker, events, advance } = setup();
+    tracker.callerSpeechStopped();
+    advance(9000);
+    tracker.answerStarted();
+    tracker.callerSpeechStopped();
+    advance(3000);
+    tracker.answerStarted();
+    const stats = tracker.finish();
+    expect(stats).toMatchObject({ answer_avg_ms: 6000, answer_max_ms: 9000 });
+    expect(events.filter((e) => e.type === "quality.answer_latency").map((e) => e.payload.answer_ms)).toEqual([9000, 3000]);
+  });
+
+  it("ignores an answer when no speech end is known", () => {
+    const { tracker } = setup();
+    tracker.answerStarted();
+    expect(tracker.finish().answer_avg_ms).toBeNull();
   });
 });
 

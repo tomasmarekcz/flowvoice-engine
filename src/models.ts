@@ -12,6 +12,11 @@ export const voiceModel = (): string => process.env.VOICE_MODEL || "gpt-realtime
 
 /** Pipeline engine: the text model that thinks (Responses API) and how much it reasons before answering. */
 export const pipelineLlmModel = (): string => process.env.PIPELINE_LLM_MODEL || "gpt-6-luna";
+/**
+ * Pipeline engine: the model may ask for several lookups in one step and the engine runs them at the same time (LEA-211).
+ * On by default; PIPELINE_PARALLEL_TOOLS=off brings back one tool after another.
+ */
+export const pipelineParallelTools = (): boolean => process.env.PIPELINE_PARALLEL_TOOLS !== "off";
 export const pipelineLlmEffort = (): string => process.env.PIPELINE_LLM_EFFORT ?? "low";
 /**
  * Pipeline engine: the two fixed sentences the engine itself says in the middle of a call ("one moment, let me check"

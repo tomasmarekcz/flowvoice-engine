@@ -19,7 +19,7 @@ import { CallQualityTracker, toolResultFailed } from "./quality-tracker";
 import { PlaybackClock } from "./playback-clock";
 import { InputBuffer } from "./input-buffer";
 import { effectiveLanguage, resolveVoice } from "./persona";
-import { elevenLabsModel, pipelineBridgeSentences, pipelineConfidenceLimits, pipelineConfidenceMode, pipelineLlmEffort, pipelineLlmModel, pipelineSttModel, voiceModel } from "./models";
+import { elevenLabsModel, pipelineBridgeSentences, pipelineConfidenceLimits, pipelineConfidenceMode, pipelineLlmEffort, pipelineLlmModel, pipelineParallelTools, pipelineSttModel, voiceModel } from "./models";
 import { TurnGate, TURN_TIMING, type TurnTiming } from "./turn-gate";
 import { analyzeLogprobs, isLowConfidence } from "./transcript-confidence";
 import { isElevenVoice } from "./voice/eleven-voices";
@@ -33,6 +33,9 @@ const STT_START_TIMEOUT_MS = 6000;
 // A tool that takes longer than this gets a short "one moment" sentence so the caller does not sit in silence.
 const TOOL_FILLER_MS = 1200;
 const MAX_TOOL_ROUNDS = 6;
+// LEA-211: tools that only look something up. When the model asks for several of them in one step they run together;
+// anything that writes (a booking, an enquiry) or ends the call is never run alongside another tool.
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["search_knowledge", "web_search", "get_services", "get_resources", "get_day_availability"]);
 // Speech this long with an empty transcript is a person talking that we did not understand (shorter is noise or a click).
 const UNCLEAR_MIN_SPEECH_MS = 700;
 // After this many "I didn't catch that" in a row the assistant stops asking and waits.
@@ -146,7 +149,8 @@ export class PipelineCallSession implements VoiceSession {
     this.calendarProjectId = settings?._calendar_project_id ?? "admin-test";
     if (this.options.fallbackReason) callCreated.then(() => this.quality.markFallback(this.options.fallbackReason!));
 
-    this.instructions = buildPromptFromSettings(settings, this.callerPhone, { includeGreeting: false }, promptSnapshot);
+    // LEA-211: this engine speaks a short sentence before a tool, and may run lookups together.
+    this.instructions = buildPromptFromSettings(settings, this.callerPhone, { includeGreeting: false, includeToolLeadIn: true, parallelTools: pipelineParallelTools() }, promptSnapshot);
     this.tools = buildTools(settings, promptSnapshot);
     const voiceName = resolveVoice(settings);
     this.logger.openaiPayload = {
@@ -412,14 +416,20 @@ export class PipelineCallSession implements VoiceSession {
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         let text = "";
+        let roundFirstTextAt = 0;
         const calls: Array<{ callId: string; name: string; arguments: string }> = [];
         const stream = this.llm({
-          model: pipelineLlmModel(), effort: pipelineLlmEffort(), instructions: this.instructions,
+          model: pipelineLlmModel(), effort: pipelineLlmEffort(), parallelTools: pipelineParallelTools(), instructions: this.instructions,
           input: this.history, tools: this.tools, signal: ctrl.signal,
         });
+        let firstTextOfRound = true;
         for await (const event of stream) {
           if (turn !== this.turnId) return;
-          if (event.type === "text") { text += event.delta; spoke = true; this.quality.turnFirstText(); this.speech?.pushText(event.delta); }
+          if (event.type === "text") {
+            text += event.delta; spoke = true; this.quality.turnFirstText(); this.speech?.pushText(event.delta);
+            // The first word of the answer that follows the tool work (the last round is the one without tools; see below).
+            if (firstTextOfRound) { firstTextOfRound = false; roundFirstTextAt = Date.now(); }
+          }
           else if (event.type === "tool_call") calls.push(event);
           else if (event.type === "usage") { this.usage.llmInput += event.inputTokens; this.usage.llmCachedInput += event.cachedInputTokens; this.usage.llmOutput += event.outputTokens; }
         }
@@ -432,10 +442,26 @@ export class PipelineCallSession implements VoiceSession {
           this.assistantEntry = this.history.length - 1;
           this.logger.handleOpenAIEvent({ type: "response.output_text.done", text });
         }
+        if (round === 0 && calls.length > 0) this.quality.toolStep(!!text.trim());
         if (calls.length === 0) {
+          if (roundFirstTextAt > 0) this.quality.answerStarted();
           // A second, small model checks whether this answer was the end of the call (the main model sometimes forgets end_call).
           if (text.trim()) void this.checkCallFinished(turn);
           return;
+        }
+        // LEA-211: several lookups asked for in one step run together. Every call is written to the history first, then the
+        // outputs in the order the model asked, so the conversation stays valid whichever lookup finishes first.
+        if (pipelineParallelTools() && calls.length > 1 && calls.every((c) => READ_ONLY_TOOLS.has(c.name))) {
+          for (const call of calls) this.history.push({ type: "function_call", call_id: call.callId, name: call.name, arguments: call.arguments });
+          const outputs = await Promise.all(calls.map((call) =>
+            this.runTool(call, turn).catch((e) => {
+              logger.error("parallel tool failed", { event: "pipeline.tool_error", tool: call.name, err: e });
+              return JSON.stringify({ error: "tool_failed" });
+            })));
+          // Written even if the caller interrupted meanwhile, so no tool call is left without its output.
+          calls.forEach((call, i) => this.history.push({ type: "function_call_output", call_id: call.callId, output: outputs[i] }));
+          if (turn !== this.turnId) return;
+          continue;
         }
         for (const call of calls) {
           this.history.push({ type: "function_call", call_id: call.callId, name: call.name, arguments: call.arguments });
@@ -446,7 +472,9 @@ export class PipelineCallSession implements VoiceSession {
             await this.hangUp(turn, true);
             return;
           }
-          await this.runTool(call, turn);
+          const output = await this.runTool(call, turn);
+          // The output goes into the conversation even if the caller interrupted meanwhile, so the model's tool call never dangles.
+          this.history.push({ type: "function_call_output", call_id: call.callId, output });
         }
         if (turn !== this.turnId) return;
       }
@@ -497,7 +525,8 @@ export class PipelineCallSession implements VoiceSession {
     }
   }
 
-  private async runTool(call: { callId: string; name: string; arguments: string }, turn: number): Promise<void> {
+  /** Runs one tool and returns its output (JSON text). The caller writes it to the history. */
+  private async runTool(call: { callId: string; name: string; arguments: string }, turn: number): Promise<string> {
     let args: Record<string, unknown> = {};
     try { args = JSON.parse(call.arguments); } catch { /* invalid json from the model */ }
     this.logger.handleOpenAIEvent({ type: "response.function_call_arguments.done", call_id: call.callId, name: call.name, arguments: call.arguments });
@@ -527,9 +556,8 @@ export class PipelineCallSession implements VoiceSession {
     }
     const output = JSON.stringify(result);
     this.logger.handleClientEvent({ type: "conversation.item.create", item: { type: "function_call_output", call_id: call.callId, output } });
-    // The output goes into the conversation even if the caller interrupted meanwhile, so the model's tool call never dangles.
-    this.history.push({ type: "function_call_output", call_id: call.callId, output });
     this.callbacks.sendJson({ type: "engine.tool_done", name: call.name });
+    return output;
   }
 
   // ─── End of the call ────────────────────────────────────────────────────────────

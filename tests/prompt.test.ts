@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildPromptFromSettings, buildProtectedCore, buildTools, buildToolsGuide } from "../src/prompt";
-import { emptySnapshot } from "../src/prompts/core";
+import { createSnapshot, emptySnapshot } from "../src/prompts/core";
 import type { AssistantSettings } from "../src/config";
 
 const BASE: AssistantSettings = {
@@ -355,5 +355,43 @@ describe("assembly order and enquiry conditions (LEA-209)", () => {
     expect(prompt).not.toContain("===SPOKEN ANSWERS===");
     expect(prompt).not.toContain("always use the caller's language");
     expect(prompt).toContain("read aloud on the phone");
+  });
+});
+
+// LEA-211
+describe("the short sentence before a tool", () => {
+  const withKnowledgeAndWeb = { ...BASE, capabilities: { calendar: true, business_knowledge: true, web_search: true } } as AssistantSettings;
+
+  it("is left out by default, so the other voice engines are unchanged", () => {
+    expect(buildPromptFromSettings(BASE)).not.toContain("===BEFORE A TOOL===");
+  });
+
+  it("sits in the tools block: after the tools preamble and before the tool-failure rule", () => {
+    const out = buildPromptFromSettings(BASE, null, { includeToolLeadIn: true });
+    const preamble = out.indexOf("===TOOLS===");
+    const leadIn = out.indexOf("===BEFORE A TOOL===");
+    const failure = out.indexOf("===WHEN A TOOL FAILS===");
+    expect(preamble).toBeGreaterThan(-1);
+    expect(leadIn).toBeGreaterThan(preamble);
+    expect(failure).toBeGreaterThan(leadIn);
+  });
+
+  it("can be edited like every other prompt", () => {
+    const snap = createSnapshot(new Map([["engine.call.tool_lead_in", { versionId: "v1", text: "SAY A WORD FIRST" }]]));
+    expect(buildPromptFromSettings(BASE, null, { includeToolLeadIn: true }, snap)).toContain("SAY A WORD FIRST");
+  });
+});
+
+describe("knowledge and web search asked for together", () => {
+  const settings = { ...BASE, capabilities: { calendar: true, business_knowledge: true, web_search: true } } as AssistantSettings;
+
+  it("keeps the one-after-another rule unless parallel tools are on", () => {
+    expect(buildToolsGuide(settings, emptySnapshot())).toContain("use search_knowledge first; if it doesn't return necessary information, use web_search");
+  });
+
+  it("lets the model call both in one step when parallel tools are on", () => {
+    const guide = buildToolsGuide(settings, emptySnapshot(), { parallelTools: true });
+    expect(guide).toContain("together in the same step");
+    expect(guide).not.toContain("use search_knowledge first; if it doesn't");
   });
 });
