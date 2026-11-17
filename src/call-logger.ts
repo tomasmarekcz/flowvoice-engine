@@ -4,6 +4,7 @@ import { logger } from "./logger";
 import { emptySnapshot, type PromptSnapshot } from "./prompts/core";
 import { ENGINE_PROMPTS as P } from "./prompts/registry";
 import { setLogContext } from "./log/context";
+import { notifyTestCallFinished } from "./test-call";
 import type { QualityStats } from "./quality-tracker";
 
 export interface TranscriptEntry {
@@ -329,6 +330,8 @@ export class CallLogger {
         }),
       });
       logger.info("call finalized", { event: "call.finalized", call_id: this.callId, duration_seconds, turns: this.transcript.length });
+      // A call from the browser (no Twilio call) may be a landing page demo: the dashboard then notifies the visitor (LEA-190).
+      if (this.twilioCallSid === null) void notifyTestCallFinished(this.callId);
     } catch (e) {
       logger.error("finalizeCall error", { err: e });
     }

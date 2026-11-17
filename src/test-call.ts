@@ -49,3 +49,24 @@ export async function planTestCallNotifications(
   if (testCall) logger.info("test call notifications", { send: plan.send, force_generate: plan.forceGenerate });
   return { testCall, plan };
 }
+
+/**
+ * Tells the dashboard that a browser (test) call has been saved (LEA-190). When the call was made on the landing page's
+ * demo, the dashboard sends the visitor their SMS and e-mail; for any other project it ignores the message. Failures are
+ * only logged: the call itself is already saved and must never depend on this.
+ */
+export async function notifyTestCallFinished(callId: string | null): Promise<void> {
+  const secret = process.env.ENGINE_INTERNAL_SECRET;
+  if (!callId || !secret) return;
+  const base = process.env.FRONTEND_API_URL ?? "http://localhost:3000";
+  try {
+    const res = await fetch(`${base}/api/demo/call-finished`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-secret": secret },
+      body: JSON.stringify({ call_id: callId }),
+    });
+    if (!res.ok) logger.warn("test call finished notice was not accepted", { status: res.status });
+  } catch (e) {
+    logger.error("test call finished notice failed", { err: e });
+  }
+}

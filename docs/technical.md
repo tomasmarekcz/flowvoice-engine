@@ -392,6 +392,9 @@ summary in/out, search embedding).
 
 **Depended on by:** `session.ts` (owns one `CallLogger` per call).
 
+## test-call.ts: telling the dashboard a test call is saved (LEA-190)
+`notifyTestCallFinished(callId)` is called from `CallLogger.finalizeCall` for every call without a Twilio call (a browser call). It posts the call id to the dashboard's `/api/demo/call-finished` with the `x-internal-secret` header (`ENGINE_INTERNAL_SECRET`, `FRONTEND_API_URL`). The dashboard ignores calls that are not landing-page demo calls and otherwise sends the visitor's SMS and e-mail. A failure is only logged. Details: dashboard `docs/features/landing-demo.md`.
+
 ## quality-tracker.ts (LEA-154)
 
 **Purpose:** `CallQualityTracker` counts what goes wrong during one call:
