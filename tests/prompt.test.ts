@@ -395,3 +395,15 @@ describe("knowledge and web search asked for together", () => {
     expect(guide).not.toContain("use search_knowledge first; if it doesn't");
   });
 });
+
+describe("the assistant speaks as part of the business (LEA-214)", () => {
+  const rule = "use the first person plural";
+  for (const language of ["cs", "en", "auto"] as const) {
+    it(`the persona says "we" about the business (${language})`, () => {
+      const prompt = buildPromptFromSettings({ ...BASE, language } as AssistantSettings, null, {}, emptySnapshot());
+      expect(prompt).toContain(rule);
+      expect(prompt).toContain("Never talk about the business as if it were somebody else");
+      expect(prompt.indexOf(rule)).toBeLessThan(prompt.indexOf("===TOOLS==="));
+    });
+  }
+});
