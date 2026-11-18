@@ -23,9 +23,13 @@ describe("recorded fallback sentences (LEA-160)", () => {
     }
   });
 
+  it("an ElevenLabs voice plays its own recording (LEA-167)", () => {
+    expect(fallbackClip("wait", "cs", "el-adam")).toBe(FALLBACK_CLIPS["el-adam"].cs.wait);
+    expect(fallbackClip("wait", "en", "el-jana")).toBe(FALLBACK_CLIPS["el-jana"].en.wait);
+  });
+
   it("a voice without recordings plays the default voice of its own gender", () => {
-    expect(fallbackClip("wait", "cs", "el-adam")).toBe(FALLBACK_CLIPS.cedar.cs.wait);
-    expect(fallbackClip("wait", "cs", "el-jana")).toBe(FALLBACK_CLIPS.marin.cs.wait);
+    expect(fallbackClip("wait", "cs", "some-new-male-voice")).toBe(FALLBACK_CLIPS.marin.cs.wait);
   });
 
   it("every Live voice is a known voice", () => {

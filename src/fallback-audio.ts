@@ -9,12 +9,11 @@ import { DEFAULT_VOICE_BY_GENDER, VOICE_GENDER } from "./persona";
 export type ClipKind = "wait" | "apology";
 
 /**
- * ElevenLabs voices whose sentences are NOT recorded yet (LEA-166): the ElevenLabs account must be on a paid plan before the
- * script can record a library voice. Until then these voices play the default OpenAI voice of the same gender when the
- * connection is lost. REMOVE a name here when `npm run fallback-audio` has recorded it; the test insists on that.
- * MUST BE EMPTY before the engine goes to production with these voices (see docs/features/call-ending.md).
+ * Voices whose sentences are NOT recorded yet. Empty since LEA-167: all four ElevenLabs voices are recorded. A new voice may be
+ * listed here only until `npm run fallback-audio` has recorded it (the test insists on removing it then).
+ * MUST BE EMPTY before the engine goes to production (see docs/features/call-ending.md).
  */
-export const VOICES_WITHOUT_CLIPS_YET: string[] = ["el-adam", "el-jarnathan", "el-hope", "el-jana"];
+export const VOICES_WITHOUT_CLIPS_YET: string[] = [];
 
 /** The recorded sentence in this voice and language, or null when there is none (a browser test call has no phone format). */
 export function fallbackClip(kind: ClipKind, language: "cs" | "en", voice: string): string | null {
